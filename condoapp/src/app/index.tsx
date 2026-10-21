@@ -1,0 +1,2268 @@
+import React, { useState, useEffect } from "react";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import {
+  StyleSheet,
+  Text,
+  View,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  Modal,
+  Alert,
+  SafeAreaView,
+  StatusBar,
+  Platform,
+  UIManager,
+  LayoutAnimation,
+} from "react-native";
+import { Ionicons, Feather, MaterialCommunityIcons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
+import { BlurView } from "expo-blur";
+import { Session } from "@supabase/supabase-js";
+import { supabase } from "../supabase"; // Ajuste o caminho se necessário
+import { Auth } from "../Auth"; // Ajuste o caminho se necessário
+
+// --- INTERFACES ---
+interface Comunicado {
+  id: number;
+  tipo: string;
+  titulo: string;
+  texto: string;
+  data: string;
+  vistoPor: string[];
+}
+interface Evento {
+  dia: number;
+  tipo: string;
+  titulo: string;
+  detalhes: string;
+}
+interface Reuniao {
+  data: string;
+  pauta: string;
+  link: string;
+}
+interface Ata {
+  mes: string;
+  reunioes: Reuniao[];
+}
+interface Sugestao {
+  id: number;
+  texto: string;
+  status: string;
+  motivo: string;
+}
+
+export default function App() {
+  // --- SISTEMA DE AUTENTICAÇÃO ---
+  const [session, setSession] = useState<Session | null>(null);
+
+  useEffect(() => {
+    const organizarSessao = (sessaoDeAcesso: Session | null) => {
+      setSession(sessaoDeAcesso);
+
+      if (sessaoDeAcesso?.user) {
+        // Lê os dados que guardámos no Auth.tsx durante o cadastro
+        const metadata = sessaoDeAcesso.user.user_metadata;
+        const role = metadata?.role || "morador";
+        const status = metadata?.status_aprovacao || "pendente";
+
+        setUser(role); // Define se é 'sindico' ou 'morador'
+
+        // Se for morador e ainda estiver pendente, bloqueia a tela
+        if (role === "morador" && status === "pendente") {
+          setIsPending(true);
+        } else {
+          setIsPending(false);
+        }
+      } else {
+        setUser(null);
+        setIsPending(false);
+      }
+    };
+
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => organizarSessao(session));
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      organizarSessao(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Se não estiver logado, bloqueia a tela e mostra o Login!
+
+  // --------------------------------
+  const [user, setUser] = useState<string | null>(null);
+  const [isDark, setIsDark] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<string>("feed");
+  const [clickCount, setClickCount] = useState<number>(0);
+  const [showAdmin, setShowAdmin] = useState<boolean>(false);
+  const [nomeUsuario, setNomeUsuario] = useState("Morador");
+  useEffect(() => {
+    const buscarNome = async () => {
+      const { data } = await supabase.auth.getUser();
+      if (data?.user?.user_metadata?.nome_completo) {
+        // Pega apenas o primeiro nome para ficar mais amigável
+        const primeiroNome =
+          data.user.user_metadata.nome_completo.split(" ")[0];
+        setNomeUsuario(primeiroNome);
+      }
+    };
+    buscarNome();
+  }, []);
+
+  const [username, setUsername] = useState<string>("");
+  const [password, setPassword] = useState<string>("");
+  const [isPending, setIsPending] = useState<boolean>(false);
+
+  // --- ESTADO DA LISTA DE ESPERA (Agora começa vazia) ---
+  const [moradoresPendentes, setMoradoresPendentes] = useState<any[]>([]);
+
+  // --- BUSCAR DADOS REAIS DO SUPABASE ---
+  const buscarPendentes = async () => {
+    const { data, error } = await supabase.rpc("get_moradores_pendentes");
+    if (data) setMoradoresPendentes(data);
+    if (error) console.log("Erro ao buscar pendentes:", error);
+  };
+
+  // Executa a busca automaticamente sempre que o síndico abre a aba de aprovações
+  useEffect(() => {
+    if (user === "sindico" && activeTab === "aprovacoes") {
+      buscarPendentes();
+    }
+  }, [user, activeTab]);
+
+  // --- FUNÇÃO PARA APROVAR REALMENTE ---
+  const aprovarMorador = async (id: string) => {
+    const { error } = await supabase.rpc("aprovar_acesso_morador", {
+      morador_id: id,
+    });
+
+    if (error) {
+      Alert.alert("Erro", "Não foi possível aprovar o morador.");
+    } else {
+      // Remove da tela imediatamente se der sucesso no banco
+      setMoradoresPendentes((prev) => prev.filter((m) => m.id !== id));
+      Alert.alert("Sucesso", "O acesso do morador foi libertado!");
+    }
+  };
+
+  // --- FUNÇÃO OFICIAL DE LOGOUT ---
+  const fazerLogout = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      Alert.alert("Erro ao sair", error.message);
+    }
+    // Não precisa de fazer mais nada, o useEffect deteta a saída e mostra o Auth.tsx novo!
+  };
+
+  const [comunicados, setComunicados] = useState<Comunicado[]>([
+    {
+      id: 1,
+      tipo: "Aviso",
+      titulo: "Manutenção da Piscina",
+      texto: "A piscina estará fechada amanhã para limpeza profunda.",
+      data: "15/10/2026",
+      vistoPor: [],
+    },
+    {
+      id: 2,
+      tipo: "Reunião",
+      titulo: "Assembleia Geral",
+      texto:
+        "Aprovação de contas do semestre. Contamos com a presença de todos.",
+      data: "20/10/2026",
+      vistoPor: [],
+    },
+  ]);
+
+  const [eventos, setEventos] = useState<Evento[]>([
+    {
+      dia: 15,
+      tipo: "manutencao",
+      titulo: "Piscina Interditada",
+      detalhes: "Limpeza e troca de filtros.",
+    },
+    {
+      dia: 20,
+      tipo: "reuniao",
+      titulo: "Assembleia Geral",
+      detalhes: "Horário: 19h30 no Salão de Festas.",
+    },
+    {
+      dia: 25,
+      tipo: "reserva",
+      titulo: "Reserva Salão de Festas",
+      detalhes: "Horário: 18h às 23h.",
+    },
+  ]);
+
+  const [atas, setAtas] = useState<Ata[]>([
+    {
+      mes: "Outubro 2026",
+      reunioes: [
+        {
+          data: "10/10/2026",
+          pauta: "Segurança e Portaria",
+          link: "Ata_10_10.pdf",
+        },
+      ],
+    },
+    {
+      mes: "Setembro 2026",
+      reunioes: [
+        { data: "05/09/2026", pauta: "Orçamento Anual", link: "Ata_05_09.pdf" },
+      ],
+    },
+  ]);
+
+  const [sugestoes, setSugestoes] = useState<Sugestao[]>([
+    {
+      id: 1,
+      texto: "Instalar câmeras no subsolo 2.",
+      status: "pendente",
+      motivo: "",
+    },
+    {
+      id: 2,
+      texto: "Trocar o bebedouro da academia.",
+      status: "arquivada",
+      motivo: "Orçamento insuficiente para este ano.",
+    },
+  ]);
+
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const [selectedMesAta, setSelectedMesAta] = useState<string | null>(null);
+  const [showNovoComunicado, setShowNovoComunicado] = useState<boolean>(false);
+  const [showNovaSugestao, setShowNovaSugestao] = useState<boolean>(false);
+  const [showAvaliarSugestao, setShowAvaliarSugestao] = useState<number | null>(
+    null,
+  );
+  const [showNovaReserva, setShowNovaReserva] = useState<boolean>(false);
+  const [dataReserva, setDataReserva] = useState<Date>(new Date());
+  const [showPicker, setShowPicker] = useState<
+    "data" | "inicio" | "fim" | null
+  >(null);
+  const [novaReserva, setNovaReserva] = useState({
+    titulo: "",
+    detalhes: "",
+    horaInicio: "",
+    horaFim: "",
+  });
+  const [showTimePicker, setShowTimePicker] = useState<"inicio" | "fim" | null>(
+    null,
+  );
+
+  // --- FUNÇÃO QUE CONTROLA O CALENDÁRIO E RELÓGIO ---
+  const onPickerChange = (event: any, selectedDate?: Date) => {
+    const currentMode = showPicker;
+    setShowPicker(null); // Oculta o modal nativo imediatamente para evitar bugs no Android
+
+    if (event.type === "set" && selectedDate) {
+      if (currentMode === "data") {
+        setDataReserva(selectedDate);
+      } else {
+        const horas = selectedDate.getHours().toString().padStart(2, "0");
+        const minutos = selectedDate.getMinutes().toString().padStart(2, "0");
+        const timeString = `${horas}:${minutos}`;
+
+        if (currentMode === "inicio") {
+          setNovaReserva((prev) => ({ ...prev, horaInicio: timeString }));
+        } else if (currentMode === "fim") {
+          setNovaReserva((prev) => ({ ...prev, horaFim: timeString }));
+        }
+      }
+    }
+  };
+
+  // --- FUNÇÃO QUE SALVA A RESERVA ---
+  const solicitarReserva = () => {
+    if (
+      !novaReserva.titulo ||
+      !novaReserva.horaInicio ||
+      !novaReserva.horaFim
+    ) {
+      return Alert.alert("Atenção", "Selecione o espaço e os horários.");
+    }
+
+    const diaSelecionado = dataReserva.getDate();
+    const timeToMins = (time: string) => {
+      const [h, m] = time.split(":").map(Number);
+      return h * 60 + m;
+    };
+
+    const startMins = timeToMins(novaReserva.horaInicio);
+    const endMins = timeToMins(novaReserva.horaFim);
+
+    if (startMins >= endMins) {
+      return Alert.alert(
+        "Atenção",
+        "A hora final deve ser maior que a hora inicial.",
+      );
+    }
+
+    // Verifica Conflitos
+    const temConflito = eventos.some((ev: any) => {
+      if (
+        ev.tipo !== "reserva" ||
+        ev.dia !== diaSelecionado ||
+        ev.titulo !== novaReserva.titulo
+      )
+        return false;
+      if (ev.horaInicio && ev.horaFim) {
+        return (
+          startMins < timeToMins(ev.horaFim) &&
+          endMins > timeToMins(ev.horaInicio)
+        );
+      }
+      return false;
+    });
+
+    if (temConflito) {
+      return Alert.alert(
+        "Indisponível",
+        "Este espaço já está reservado para este horário neste dia.",
+      );
+    }
+    const aprovarMorador = (id: string) => {
+      animate();
+      setMoradoresPendentes((prev) => prev.filter((m) => m.id !== id));
+      Alert.alert("Morador Aprovado", "O acesso foi libertado com sucesso.");
+    };
+
+    const novoEvento = {
+      dia: diaSelecionado,
+      tipo: "reserva",
+      titulo: novaReserva.titulo,
+      horaInicio: novaReserva.horaInicio,
+      horaFim: novaReserva.horaFim,
+      detalhes: `Horário: ${novaReserva.horaInicio} às ${novaReserva.horaFim}\n${novaReserva.detalhes}`,
+    };
+
+    setEventos([...eventos, novoEvento]);
+    setShowNovaReserva(false);
+    setNovaReserva({ titulo: "", detalhes: "", horaInicio: "", horaFim: "" });
+    setDataReserva(new Date());
+    Alert.alert("Sucesso", "A sua reserva foi efetuada!");
+  };
+
+  const [novoCom, setNovoCom] = useState({
+    titulo: "",
+    texto: "",
+    tipo: "AVISO",
+  });
+  const [novaSugestaoTexto, setNovaSugestaoTexto] = useState<string>("");
+  const [motivoArquivamento, setMotivoArquivamento] = useState<string>("");
+
+  // Transição suave para mudanças de estado visual
+  const animate = () =>
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+
+  const changeTab = (tab: string) => {
+    animate();
+    setActiveTab(tab);
+  };
+
+  const handleLogin = () => {
+    const sqlPattern = /('|;|--|union|select|insert|drop)/i;
+    if (sqlPattern.test(username) || sqlPattern.test(password)) {
+      Alert.alert(
+        "Segurança",
+        "Caracteres inválidos detectados. Acesso bloqueado.",
+      );
+      return;
+    }
+    animate();
+    if (username.toLowerCase() === "sindico" && password === "123")
+      setUser("sindico");
+    else if (username.toLowerCase() === "morador" && password === "123")
+      setUser("morador");
+    else
+      Alert.alert(
+        "Erro",
+        "Credenciais inválidas. Use sindico/123 ou morador/123",
+      );
+  };
+
+  const handleTitleClick = () => {
+    const newCount = clickCount + 1;
+    setClickCount(newCount);
+    if (newCount === 7) {
+      animate();
+      setShowAdmin(true);
+      Alert.alert("Modo Desenvolvedor", "Painel de administração ativado.");
+    }
+  };
+
+  const marcarComoVisto = (id: number) => {
+    if (!user) return;
+    animate();
+    setComunicados((prev) =>
+      prev.map((c) =>
+        c.id === id ? { ...c, vistoPor: [...c.vistoPor, user] } : c,
+      ),
+    );
+  };
+
+  const criarComunicado = () => {
+    if (!novoCom.titulo || !novoCom.texto)
+      return Alert.alert("Atenção", "Preencha todos os campos.");
+    animate();
+    setComunicados([
+      {
+        id: Date.now(),
+        ...novoCom,
+        data: new Date().toLocaleDateString("pt-BR"),
+        vistoPor: [],
+      },
+      ...comunicados,
+    ]);
+    setShowNovoComunicado(false);
+    setNovoCom({ tipo: "AVISO", titulo: "", texto: "" });
+  };
+
+  const enviarSugestao = () => {
+    if (!novaSugestaoTexto) return;
+    animate();
+    setSugestoes([
+      {
+        id: Date.now(),
+        texto: novaSugestaoTexto,
+        status: "pendente",
+        motivo: "",
+      },
+      ...sugestoes,
+    ]);
+    setShowNovaSugestao(false);
+    setNovaSugestaoTexto("");
+  };
+
+  const avaliarSugestao = (id: number | null, acao: string) => {
+    if (id === null) return;
+    if (acao === "arquivada" && !motivoArquivamento)
+      return Alert.alert("Atenção", "É obrigatório justificar o arquivamento.");
+    animate();
+    setSugestoes((prev) =>
+      prev.map((s) =>
+        s.id === id
+          ? {
+              ...s,
+              status: acao,
+              motivo: acao === "arquivada" ? motivoArquivamento : "",
+            }
+          : s,
+      ),
+    );
+    setShowAvaliarSugestao(null);
+    setMotivoArquivamento("");
+  };
+
+  if (!session) {
+    return <Auth />;
+  }
+
+  //Tela de pendente para moradores aguardando aprovacao do sindico.
+  if (isPending) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "#0f172a",
+          justifyContent: "center",
+          alignItems: "center",
+          padding: 24,
+        }}
+      >
+        <MaterialCommunityIcons
+          name="clock-time-four-outline"
+          size={64}
+          color="#6366f1"
+          style={{ marginBottom: 20 }}
+        />
+        <Text
+          style={{
+            fontSize: 24,
+            fontWeight: "bold",
+            color: "#f8fafc",
+            marginBottom: 12,
+          }}
+        >
+          Cadastro em Análise
+        </Text>
+        <Text
+          style={{
+            fontSize: 16,
+            color: "#94a3b8",
+            textAlign: "center",
+            marginBottom: 32,
+          }}
+        >
+          O seu cadastro foi recebido com sucesso! O síndico irá verificar a sua
+          unidade e libertar o seu acesso em breve.
+        </Text>
+        <TouchableOpacity
+          style={{
+            backgroundColor: "#1e293b",
+            padding: 16,
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: "#334155",
+            width: "100%",
+            alignItems: "center",
+          }}
+          onPress={() => supabase.auth.signOut()}
+        >
+          <Text style={{ color: "#f8fafc", fontWeight: "bold" }}>
+            Voltar para o Login
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // --- TEMAS CORES ---
+  const theme = isDark
+    ? {
+        bg: "#0F172A",
+        card: "#1E293B",
+        text: "#F8FAFC",
+        textMuted: "#94A3B8",
+        border: "#334155",
+        primary: ["#6366F1", "#8B5CF6"],
+        success: "#10B981",
+        danger: "#EF4444",
+        warning: "#F59E0B",
+      }
+    : {
+        bg: "#F8FAFC",
+        card: "#FFFFFF",
+        text: "#0F172A",
+        textMuted: "#64748B",
+        border: "#E2E8F0",
+        primary: ["#4F46E5", "#7C3AED"],
+        success: "#059669",
+        danger: "#DC2626",
+        warning: "#D97706",
+      };
+
+  // --- TELA DE LOGIN ---
+  if (!user) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.bg }]}>
+        <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
+        <View style={styles.loginContainer}>
+          <View style={styles.iconWrapper}>
+            <MaterialCommunityIcons
+              name="office-building"
+              size={60}
+              color={theme.primary[0]}
+            />
+          </View>
+          <Text style={[styles.appName, { color: theme.text }]}>CondoOwl</Text>
+          <Text style={[styles.loginSubtitle, { color: theme.textMuted }]}>
+            Acesse sua conta para continuar
+          </Text>
+
+          <View
+            style={[
+              styles.card,
+              {
+                backgroundColor: theme.card,
+                borderColor: theme.border,
+                shadowColor: theme.primary[0],
+              },
+            ]}
+          >
+            <TextInput
+              style={[
+                styles.input,
+                {
+                  color: theme.text,
+                  borderColor: theme.border,
+                  backgroundColor: theme.bg,
+                },
+              ]}
+              placeholder="Usuário"
+              placeholderTextColor={theme.textMuted}
+              value={username}
+              onChangeText={setUsername}
+              autoCapitalize="none"
+            />
+            <TextInput
+              style={[
+                styles.input,
+                {
+                  color: theme.text,
+                  borderColor: theme.border,
+                  backgroundColor: theme.bg,
+                },
+              ]}
+              placeholder="Senha"
+              placeholderTextColor={theme.textMuted}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+            />
+
+            <TouchableOpacity onPress={handleLogin} activeOpacity={0.8}>
+              <LinearGradient
+                colors={theme.primary as [string, string]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.btnGradient}
+              >
+                <Text style={styles.btnText}>Entrar</Text>
+                <Feather
+                  name="arrow-right"
+                  size={20}
+                  color="#FFF"
+                  style={{ marginLeft: 8 }}
+                />
+              </LinearGradient>
+            </TouchableOpacity>
+
+            <View style={styles.loginShortcuts}>
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  fontSize: 13,
+                  marginBottom: 12,
+                  textAlign: "center",
+                }}
+              >
+                Acesso rápido para testes
+              </Text>
+              <View style={styles.row}>
+                <TouchableOpacity
+                  style={[
+                    styles.btnOutline,
+                    { borderColor: theme.primary[0], flex: 1, marginRight: 6 },
+                  ]}
+                  onPress={() => {
+                    setUsername("sindico");
+                    setPassword("123");
+                  }}
+                >
+                  <Text style={{ color: theme.primary[0], fontWeight: "700" }}>
+                    Síndico
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.btnOutline,
+                    { borderColor: theme.primary[0], flex: 1, marginLeft: 6 },
+                  ]}
+                  onPress={() => {
+                    setUsername("morador");
+                    setPassword("123");
+                  }}
+                >
+                  <Text style={{ color: theme.primary[0], fontWeight: "700" }}>
+                    Morador
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // --- TELA PRINCIPAL ---
+  return (
+    // 1. O fundo principal do navegador (ficará escuro nas laterais esquerdas e direitas no PC)
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#0f172a" }}>
+      {/* 2. O Contentor Responsivo do PWA */}
+      <View
+        style={{
+          flex: 1,
+          width: "100%",
+          maxWidth: 600, // Limita a largura num PC
+          alignSelf: "center", // Fica bem no meio da tela
+          backgroundColor: theme.bg,
+          position: "relative", // Mantém o menu inferior preso a esta "caixa"
+        }}
+      >
+        <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
+
+        {/* HEADER GLOBAL (Agora com a logo da Coruja) */}
+        <View style={[styles.header, { backgroundColor: theme.bg }]}>
+          <TouchableOpacity
+            onPress={handleTitleClick}
+            activeOpacity={1}
+            style={styles.row}
+          >
+            <MaterialCommunityIcons name="owl" size={32} color="#818cf8" />
+            <Text
+              style={[styles.headerTitle, { color: theme.text, marginLeft: 8 }]}
+            >
+              Condo<Text style={{ color: "#818cf8" }}>Owl</Text>
+            </Text>
+          </TouchableOpacity>
+          <View style={styles.row}>
+            <TouchableOpacity
+              onPress={() => {
+                animate();
+                setIsDark(!isDark);
+              }}
+              style={styles.iconBtn}
+            >
+              <Feather
+                name={isDark ? "sun" : "moon"}
+                size={22}
+                color={theme.textMuted}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={async () => {
+                animate();
+                await supabase.auth.signOut();
+              }}
+              style={styles.iconBtn}
+            >
+              <Feather name="log-out" size={22} color={theme.danger} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <ScrollView
+          style={styles.contentContainer}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 120 }}
+        >
+          {/* === ABA: FEED === */}
+          {activeTab === "feed" && (
+            <View>
+              <View style={styles.pageHeader}>
+                {/* 👇 Bloco novo com o Nome e o Título juntos 👇 */}
+                <View>
+                  <Text
+                    style={{
+                      fontSize: 18,
+                      color: theme.textMuted,
+                      marginBottom: 4,
+                    }}
+                  >
+                    Olá, {nomeUsuario}! 👋
+                  </Text>
+                  <Text style={[styles.pageTitle, { color: theme.text }]}>
+                    Mural de Avisos
+                  </Text>
+                </View>
+                {/* 👆 Fim do bloco novo 👆 */}
+                {user === "sindico" && (
+                  <TouchableOpacity
+                    onPress={() => setShowNovoComunicado(true)}
+                    activeOpacity={0.8}
+                  >
+                    <LinearGradient
+                      colors={theme.primary as [string, string]}
+                      start={{ x: 0, y: 0 }}
+                      style={styles.btnSmallGradient}
+                    >
+                      <Feather name="plus" size={16} color="#FFF" />
+                      <Text style={styles.btnTextSmall}>Novo</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {comunicados.map((c) => {
+                const visto = c.vistoPor.includes(user);
+                return (
+                  <View
+                    key={c.id}
+                    style={[
+                      styles.card,
+                      {
+                        backgroundColor: theme.card,
+                        borderColor: theme.border,
+                        opacity: visto ? 0.6 : 1,
+                        shadowColor: theme.border,
+                      },
+                    ]}
+                  >
+                    <View style={styles.rowBetween}>
+                      <View
+                        style={[
+                          styles.tag,
+                          { backgroundColor: theme.primary[0] + "1A" },
+                        ]}
+                      >
+                        <Ionicons
+                          name={
+                            c.tipo === "Reunião"
+                              ? "people-outline"
+                              : "alert-circle-outline"
+                          }
+                          size={14}
+                          color={theme.primary[0]}
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text
+                          style={{
+                            color: theme.primary[0],
+                            fontSize: 12,
+                            fontWeight: "700",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {c.tipo}
+                        </Text>
+                      </View>
+                      <Text
+                        style={{
+                          color: theme.textMuted,
+                          fontSize: 12,
+                          fontWeight: "500",
+                        }}
+                      >
+                        {c.data}
+                      </Text>
+                    </View>
+                    <Text style={[styles.cardTitle, { color: theme.text }]}>
+                      {c.titulo}
+                    </Text>
+                    <Text style={[styles.cardText, { color: theme.textMuted }]}>
+                      {c.texto}
+                    </Text>
+
+                    {!visto && (
+                      <TouchableOpacity
+                        style={[
+                          styles.btnOutline,
+                          {
+                            borderColor: theme.border,
+                            marginTop: 16,
+                            backgroundColor: theme.bg,
+                          },
+                        ]}
+                        onPress={() => marcarComoVisto(c.id)}
+                      >
+                        <Feather
+                          name="check-circle"
+                          size={18}
+                          color={theme.success}
+                          style={{ marginRight: 8 }}
+                        />
+                        <Text
+                          style={{ color: theme.success, fontWeight: "700" }}
+                        >
+                          Marcar como Visto
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+          )}
+
+          {/* === ABA: CALENDÁRIO === */}
+          {activeTab === "calendario" && (
+            <View>
+              <View style={styles.pageHeader}>
+                <View>
+                  <Text style={[styles.pageTitle, { color: theme.text }]}>
+                    Agenda do Mês
+                  </Text>
+                  <Text style={{ color: theme.primary[0], fontWeight: "bold" }}>
+                    Outubro 26
+                  </Text>
+                </View>
+                {(user === "morador" || user === "sindico") && (
+                  <TouchableOpacity
+                    onPress={() => setShowNovaReserva(true)}
+                    activeOpacity={0.8}
+                  >
+                    <LinearGradient
+                      colors={theme.primary as [string, string]}
+                      start={{ x: 0, y: 0 }}
+                      style={styles.btnSmallGradient}
+                    >
+                      <Feather name="calendar" size={16} color="#FFF" />
+                      <Text style={styles.btnTextSmall}>Reservar</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <View
+                style={[
+                  styles.calendarContainer,
+                  {
+                    backgroundColor: theme.card,
+                    borderColor: theme.border,
+                    shadowColor: theme.border,
+                  },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.calendarWeekRow,
+                    {
+                      borderBottomColor: theme.border,
+                      backgroundColor: theme.bg,
+                    },
+                  ]}
+                >
+                  {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map(
+                    (d, i) => (
+                      <Text
+                        key={i}
+                        style={[styles.weekDayText, { color: theme.textMuted }]}
+                      >
+                        {d}
+                      </Text>
+                    ),
+                  )}
+                </View>
+
+                <View style={styles.calendarGrid}>
+                  {Array.from({ length: 31 }).map((_, i) => {
+                    const dia = i + 1;
+                    const eventoDoDia = eventos.find((e) => e.dia === dia);
+                    return (
+                      <TouchableOpacity
+                        key={dia}
+                        style={[
+                          styles.dayBox,
+                          {
+                            borderBottomColor: theme.border,
+                            borderRightColor: theme.border,
+                          },
+                          eventoDoDia && {
+                            backgroundColor: theme.primary[0] + "10",
+                          },
+                        ]}
+                        onPress={() =>
+                          eventoDoDia ? setSelectedDay(dia) : null
+                        }
+                        activeOpacity={0.6}
+                      >
+                        <Text
+                          style={{
+                            color: eventoDoDia ? theme.primary[0] : theme.text,
+                            fontWeight: eventoDoDia ? "bold" : "500",
+                            fontSize: 15,
+                          }}
+                        >
+                          {dia}
+                        </Text>
+                        {eventoDoDia && (
+                          <View
+                            style={[
+                              styles.eventDot,
+                              { backgroundColor: theme.primary[0] },
+                            ]}
+                          />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* === ABA: ATAS E SUGESTÕES === */}
+          {activeTab === "atas" && (
+            <View>
+              <Text
+                style={[
+                  styles.pageTitle,
+                  { color: theme.text, marginBottom: 15 },
+                ]}
+              >
+                Biblioteca de Atas
+              </Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ marginHorizontal: -20, paddingHorizontal: 20 }}
+              >
+                {atas.map((ata, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    style={[
+                      styles.book,
+                      {
+                        backgroundColor: theme.card,
+                        borderColor: theme.border,
+                        shadowColor: theme.border,
+                      },
+                    ]}
+                    onPress={() => setSelectedMesAta(ata.mes)}
+                    activeOpacity={0.8}
+                  >
+                    <LinearGradient
+                      colors={theme.primary as [string, string]}
+                      style={styles.bookBinding}
+                    />
+                    <Ionicons
+                      name="journal-outline"
+                      size={32}
+                      color={theme.textMuted}
+                      style={{ marginBottom: 12, marginLeft: 15 }}
+                    />
+                    <Text
+                      style={[
+                        styles.bookTitle,
+                        { color: theme.text, marginLeft: 15 },
+                      ]}
+                    >
+                      {ata.mes}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.bookSubtitle,
+                        { color: theme.textMuted, marginLeft: 15 },
+                      ]}
+                    >
+                      {ata.reunioes.length} Reuniões
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              <View
+                style={[styles.divider, { backgroundColor: theme.border }]}
+              />
+
+              <View style={styles.pageHeader}>
+                <Text style={[styles.pageTitle, { color: theme.text }]}>
+                  Caixa de Sugestões
+                </Text>
+                {user === "morador" && (
+                  <TouchableOpacity
+                    onPress={() => setShowNovaSugestao(true)}
+                    activeOpacity={0.8}
+                  >
+                    <LinearGradient
+                      colors={theme.primary as [string, string]}
+                      start={{ x: 0, y: 0 }}
+                      style={styles.btnSmallGradient}
+                    >
+                      <Feather name="plus" size={16} color="#FFF" />
+                      <Text style={styles.btnTextSmall}>Sugerir</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {sugestoes.map((s) => (
+                <View
+                  key={s.id}
+                  style={[
+                    styles.card,
+                    {
+                      backgroundColor: theme.card,
+                      borderColor: theme.border,
+                      shadowColor: theme.border,
+                    },
+                  ]}
+                >
+                  <View style={styles.rowBetween}>
+                    <View
+                      style={[
+                        styles.tag,
+                        {
+                          backgroundColor:
+                            s.status === "aprovada"
+                              ? theme.success + "1A"
+                              : s.status === "arquivada"
+                                ? theme.danger + "1A"
+                                : theme.warning + "1A",
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={{
+                          color:
+                            s.status === "aprovada"
+                              ? theme.success
+                              : s.status === "arquivada"
+                                ? theme.danger
+                                : theme.warning,
+                          fontWeight: "800",
+                          fontSize: 11,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.5,
+                        }}
+                      >
+                        {s.status}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text
+                    style={{
+                      color: theme.text,
+                      fontSize: 16,
+                      marginTop: 12,
+                      lineHeight: 24,
+                    }}
+                  >
+                    {s.texto}
+                  </Text>
+
+                  {s.status === "arquivada" && s.motivo !== "" && (
+                    <View
+                      style={[
+                        styles.motivoBox,
+                        {
+                          backgroundColor: theme.bg,
+                          borderColor: theme.border,
+                        },
+                      ]}
+                    >
+                      <View style={styles.row}>
+                        <Feather
+                          name="info"
+                          size={14}
+                          color={theme.danger}
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text
+                          style={{
+                            color: theme.danger,
+                            fontSize: 13,
+                            fontWeight: "700",
+                          }}
+                        >
+                          Motivo do Arquivamento:
+                        </Text>
+                      </View>
+                      <Text
+                        style={{
+                          color: theme.text,
+                          fontSize: 14,
+                          marginTop: 6,
+                          lineHeight: 20,
+                        }}
+                      >
+                        {s.motivo}
+                      </Text>
+                    </View>
+                  )}
+
+                  {user === "sindico" && s.status === "pendente" && (
+                    <View style={[styles.row, { marginTop: 16 }]}>
+                      <TouchableOpacity
+                        style={[
+                          styles.btnOutline,
+                          {
+                            borderColor: theme.success,
+                            flex: 1,
+                            marginRight: 6,
+                            backgroundColor: theme.success + "10",
+                          },
+                        ]}
+                        onPress={() => avaliarSugestao(s.id, "aprovada")}
+                      >
+                        <Text
+                          style={{ color: theme.success, fontWeight: "700" }}
+                        >
+                          Aprovar
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.btnOutline,
+                          {
+                            borderColor: theme.danger,
+                            flex: 1,
+                            marginLeft: 6,
+                            backgroundColor: theme.danger + "10",
+                          },
+                        ]}
+                        onPress={() => setShowAvaliarSugestao(s.id)}
+                      >
+                        <Text
+                          style={{ color: theme.danger, fontWeight: "700" }}
+                        >
+                          Arquivar
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              ))}
+            </View>
+          )}
+        </ScrollView>
+        {/* === ECRÃ DE APROVAÇÕES (Apenas Síndico) === */}
+        {activeTab === "aprovacoes" && user === "sindico" && (
+          <View
+            style={{
+              flex: 1,
+              minHeight: 800,
+              paddingHorizontal: 20,
+              paddingTop: 40,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 24,
+                fontWeight: "bold",
+                color: theme.text,
+                marginBottom: 20,
+              }}
+            >
+              Aprovar Moradores
+            </Text>
+
+            {moradoresPendentes.length === 0 ? (
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  textAlign: "center",
+                  marginTop: 20,
+                }}
+              >
+                Nenhum morador a aguardar aprovação.
+              </Text>
+            ) : (
+              moradoresPendentes.map((morador) => (
+                <View
+                  key={morador.id}
+                  style={[
+                    styles.card,
+                    {
+                      backgroundColor: theme.card,
+                      borderColor: theme.border,
+                      marginBottom: 12,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      color: theme.text,
+                      fontWeight: "bold",
+                      fontSize: 18,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {morador.nome_completo || "Nome não informado"}
+                  </Text>
+
+                  <Text
+                    style={{
+                      color: theme.textMuted,
+                      fontSize: 14,
+                      marginBottom: 2,
+                    }}
+                  >
+                    E-mail: {morador.email}
+                  </Text>
+
+                  <Text
+                    style={{
+                      color: theme.textMuted,
+                      fontSize: 14,
+                      marginBottom: 2,
+                    }}
+                  >
+                    Nascimento: {morador.data_nascimento || "Não informada"}
+                  </Text>
+
+                  <Text
+                    style={{
+                      color: theme.textMuted,
+                      fontSize: 14,
+                      marginBottom: 16,
+                    }}
+                  >
+                    Unidade: {morador.unidade}
+                  </Text>
+
+                  <TouchableOpacity
+                    style={{
+                      backgroundColor: theme.success,
+                      width: "100%",
+                      alignItems: "center",
+                      padding: 12,
+                      borderRadius: 8,
+                    }}
+                    onPress={() => aprovarMorador(morador.id)}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                      Aprovar Acesso
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
+
+            {/* Espaço "fantasma" obrigatório para o último item não ficar preso atrás do menu inferior */}
+            <View style={{ height: 150 }} />
+          </View>
+        )}
+        {/* === BOTTOM TAB BAR (FLOATING & BLURRED) === */}
+        <View style={styles.floatingTabBarContainer}>
+          <BlurView
+            intensity={isDark ? 30 : 80}
+            tint={isDark ? "dark" : "light"}
+            style={[styles.tabBar, { borderColor: theme.border }]}
+          >
+            {[
+              { id: "feed", icon: "home", label: "Mural" },
+              { id: "calendario", icon: "calendar", label: "Agenda" },
+              { id: "atas", icon: "book-open", label: "Atas" },
+              // Injeta o botão de aprovação automaticamente e com a mesma formatação se for síndico
+              ...(user === "sindico"
+                ? [{ id: "aprovacoes", icon: "user-check", label: "Aprovar" }]
+                : []),
+            ].map((tab) => (
+              <TouchableOpacity
+                key={tab.id}
+                style={styles.tabItem}
+                onPress={() => changeTab(tab.id)}
+              >
+                <Feather
+                  name={tab.icon as any}
+                  size={24}
+                  color={
+                    activeTab === tab.id ? theme.primary[0] : theme.textMuted
+                  }
+                />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    {
+                      color:
+                        activeTab === tab.id
+                          ? theme.primary[0]
+                          : theme.textMuted,
+                    },
+                  ]}
+                >
+                  {tab.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            {showAdmin && (
+              <TouchableOpacity
+                style={styles.tabItem}
+                onPress={() => changeTab("admin")}
+              >
+                <Feather
+                  name="settings"
+                  size={24}
+                  color={activeTab === "admin" ? theme.danger : theme.textMuted}
+                />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    {
+                      color:
+                        activeTab === "admin" ? theme.danger : theme.textMuted,
+                    },
+                  ]}
+                >
+                  Admin
+                </Text>
+              </TouchableOpacity>
+            )}
+          </BlurView>
+        </View>
+
+        {/* ========================================== */}
+        {/* MODAIS COM BLUR (GLASSMORPHISM)            */}
+        {/* ========================================== */}
+
+        {/* Modal: Detalhes do Calendário */}
+        <Modal visible={!!selectedDay} transparent animationType="fade">
+          <BlurView
+            intensity={20}
+            tint={isDark ? "dark" : "dark"}
+            style={styles.modalOverlay}
+          >
+            <View
+              style={[
+                styles.modalContent,
+                { backgroundColor: theme.card, shadowColor: "#000" },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.pageTitle,
+                  { color: theme.text, textAlign: "center", marginBottom: 20 },
+                ]}
+              >
+                Dia {selectedDay} de Outubro
+              </Text>
+              {eventos
+                .filter((e) => e.dia === selectedDay)
+                .map((e, idx) => (
+                  <View
+                    key={idx}
+                    style={[
+                      styles.eventDetailBox,
+                      { backgroundColor: theme.bg, borderColor: theme.border },
+                    ]}
+                  >
+                    <View style={styles.row}>
+                      <Ionicons
+                        name="calendar-clear"
+                        size={18}
+                        color={theme.primary[0]}
+                        style={{ marginRight: 8 }}
+                      />
+                      <Text
+                        style={{
+                          color: theme.primary[0],
+                          fontWeight: "800",
+                          fontSize: 16,
+                        }}
+                      >
+                        {e.titulo}
+                      </Text>
+                    </View>
+                    <Text
+                      style={{
+                        color: theme.text,
+                        marginTop: 8,
+                        fontSize: 15,
+                        lineHeight: 22,
+                      }}
+                    >
+                      {e.detalhes}
+                    </Text>
+                  </View>
+                ))}
+              <TouchableOpacity
+                style={[
+                  styles.btnOutline,
+                  {
+                    borderColor: theme.border,
+                    marginTop: 24,
+                    backgroundColor: theme.bg,
+                  },
+                ]}
+                onPress={() => setSelectedDay(null)}
+              >
+                <Text style={{ color: theme.text, fontWeight: "700" }}>
+                  Fechar
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </BlurView>
+        </Modal>
+
+        {/* Modal: Nova Sugestão */}
+        <Modal visible={showNovaSugestao} transparent animationType="slide">
+          <BlurView intensity={20} tint="dark" style={styles.modalOverlay}>
+            <View
+              style={[styles.modalContent, { backgroundColor: theme.card }]}
+            >
+              <Text
+                style={[
+                  styles.pageTitle,
+                  { color: theme.text, marginBottom: 10 },
+                ]}
+              >
+                Sugerir Pauta
+              </Text>
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  marginBottom: 20,
+                  fontSize: 14,
+                }}
+              >
+                Sua sugestão será enviada para avaliação e poderá virar pauta na
+                próxima reunião.
+              </Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    color: theme.text,
+                    borderColor: theme.border,
+                    backgroundColor: theme.bg,
+                    height: 120,
+                    textAlignVertical: "top",
+                  },
+                ]}
+                placeholder="Descreva sua sugestão..."
+                placeholderTextColor={theme.textMuted}
+                multiline
+                value={novaSugestaoTexto}
+                onChangeText={setNovaSugestaoTexto}
+              />
+              <View style={styles.row}>
+                <TouchableOpacity
+                  style={{ flex: 1, marginRight: 6 }}
+                  onPress={enviarSugestao}
+                >
+                  <LinearGradient
+                    colors={theme.primary as [string, string]}
+                    style={styles.btnGradient}
+                  >
+                    <Text style={styles.btnText}>Enviar</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.btnOutline,
+                    { borderColor: theme.border, flex: 1, marginLeft: 6 },
+                  ]}
+                  onPress={() => setShowNovaSugestao(false)}
+                >
+                  <Text style={{ color: theme.text, fontWeight: "700" }}>
+                    Cancelar
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </BlurView>
+        </Modal>
+        {/* Modal: Novo Comunicado */}
+        <Modal visible={showNovoComunicado} transparent animationType="slide">
+          <BlurView
+            intensity={20}
+            tint={isDark ? "dark" : "dark"}
+            style={styles.modalOverlay}
+          >
+            <View
+              style={[styles.modalContent, { backgroundColor: theme.card }]}
+            >
+              <Text
+                style={[
+                  styles.pageTitle,
+                  { color: theme.text, marginBottom: 15 },
+                ]}
+              >
+                Novo Comunicado
+              </Text>
+
+              {/* NOVO: Seleção de Categoria */}
+              <Text
+                style={{
+                  color: theme.text,
+                  fontSize: 12,
+                  marginBottom: 6,
+                  fontWeight: "600",
+                }}
+              >
+                Categoria
+              </Text>
+              <View
+                style={{
+                  flexDirection: "row",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  marginBottom: 15,
+                }}
+              >
+                {["AVISO", "REUNIÃO", "MANUTENÇÃO", "SOCIAL"].map((cat) => (
+                  <TouchableOpacity
+                    key={cat}
+                    onPress={() => setNovoCom({ ...novoCom, tipo: cat })}
+                    style={{
+                      paddingVertical: 6,
+                      paddingHorizontal: 12,
+                      borderRadius: 20,
+                      backgroundColor:
+                        novoCom.tipo === cat ? theme.primary[0] : theme.bg,
+                      borderWidth: 1,
+                      borderColor:
+                        novoCom.tipo === cat ? theme.primary[0] : theme.border,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: novoCom.tipo === cat ? "#FFF" : theme.text,
+                        fontSize: 12,
+                        fontWeight: "bold",
+                      }}
+                    >
+                      {cat}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    color: theme.text,
+                    borderColor: theme.border,
+                    backgroundColor: theme.bg,
+                  },
+                ]}
+                placeholder="Título do Comunicado"
+                placeholderTextColor={theme.textMuted}
+                value={novoCom.titulo}
+                onChangeText={(t) => setNovoCom({ ...novoCom, titulo: t })}
+              />
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    color: theme.text,
+                    borderColor: theme.border,
+                    backgroundColor: theme.bg,
+                    height: 100,
+                    textAlignVertical: "top",
+                  },
+                ]}
+                placeholder="Digite a mensagem completa..."
+                placeholderTextColor={theme.textMuted}
+                multiline
+                value={novoCom.texto}
+                onChangeText={(t) => setNovoCom({ ...novoCom, texto: t })}
+              />
+
+              <View style={styles.row}>
+                <TouchableOpacity
+                  style={{ flex: 1, marginRight: 6 }}
+                  onPress={() => {
+                    /* Sua função de criar comunicado */ setShowNovoComunicado(
+                      false,
+                    );
+                  }}
+                >
+                  <LinearGradient
+                    colors={theme.primary as [string, string]}
+                    style={styles.btnGradient}
+                  >
+                    <Text style={styles.btnText}>Publicar</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.btnOutline,
+                    { borderColor: theme.border, flex: 1, marginLeft: 6 },
+                  ]}
+                  onPress={() => setShowNovoComunicado(false)}
+                >
+                  <Text style={{ color: theme.text, fontWeight: "700" }}>
+                    Cancelar
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </BlurView>
+        </Modal>
+
+        {/* Modal: Ler Atas */}
+        <Modal visible={!!selectedMesAta} transparent animationType="fade">
+          <BlurView
+            intensity={20}
+            tint={isDark ? "dark" : "dark"}
+            style={styles.modalOverlay}
+          >
+            <View
+              style={[styles.modalContent, { backgroundColor: theme.card }]}
+            >
+              <Text
+                style={[
+                  styles.pageTitle,
+                  { color: theme.text, marginBottom: 20 },
+                ]}
+              >
+                Atas: {selectedMesAta}
+              </Text>
+              {atas
+                .find((a) => a.mes === selectedMesAta)
+                ?.reunioes.map((r, idx) => (
+                  <View
+                    key={idx}
+                    style={[
+                      styles.eventDetailBox,
+                      {
+                        backgroundColor: theme.bg,
+                        borderColor: theme.border,
+                        marginBottom: 10,
+                        marginTop: 0,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={{
+                        color: theme.text,
+                        fontWeight: "800",
+                        fontSize: 16,
+                      }}
+                    >
+                      {r.data}
+                    </Text>
+                    <Text
+                      style={{
+                        color: theme.textMuted,
+                        marginTop: 4,
+                        marginBottom: 12,
+                      }}
+                    >
+                      Pauta: {r.pauta}
+                    </Text>
+                    <TouchableOpacity
+                      style={[
+                        styles.btnOutline,
+                        {
+                          borderColor: theme.primary[0],
+                          padding: 10,
+                          backgroundColor: theme.primary[0] + "10",
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={{
+                          color: theme.primary[0],
+                          fontWeight: "700",
+                          textAlign: "center",
+                        }}
+                      >
+                        Abrir PDF
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              <TouchableOpacity
+                style={[
+                  styles.btnOutline,
+                  {
+                    borderColor: theme.border,
+                    marginTop: 14,
+                    backgroundColor: theme.bg,
+                  },
+                ]}
+                onPress={() => setSelectedMesAta(null)}
+              >
+                <Text style={{ color: theme.text, fontWeight: "700" }}>
+                  Fechar
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </BlurView>
+        </Modal>
+
+        {/* Modal: Motivo Arquivamento */}
+        <Modal visible={!!showAvaliarSugestao} transparent animationType="fade">
+          <BlurView
+            intensity={20}
+            tint={isDark ? "dark" : "dark"}
+            style={styles.modalOverlay}
+          >
+            <View
+              style={[styles.modalContent, { backgroundColor: theme.card }]}
+            >
+              <Text
+                style={[
+                  styles.pageTitle,
+                  { color: theme.text, marginBottom: 10 },
+                ]}
+              >
+                Arquivar Sugestão
+              </Text>
+              <Text style={{ color: theme.textMuted, marginBottom: 20 }}>
+                Por que esta sugestão não será pautada?
+              </Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    color: theme.text,
+                    borderColor: theme.border,
+                    backgroundColor: theme.bg,
+                    height: 100,
+                    textAlignVertical: "top",
+                  },
+                ]}
+                placeholder="Digite o motivo obrigatório..."
+                placeholderTextColor={theme.textMuted}
+                multiline
+                value={motivoArquivamento}
+                onChangeText={setMotivoArquivamento}
+              />
+              <View style={styles.row}>
+                <TouchableOpacity
+                  style={[
+                    styles.btnOutline,
+                    {
+                      borderColor: theme.danger,
+                      backgroundColor: theme.danger + "10",
+                      flex: 1,
+                      marginRight: 6,
+                    },
+                  ]}
+                  onPress={() =>
+                    avaliarSugestao(showAvaliarSugestao, "arquivada")
+                  }
+                >
+                  <Text style={{ color: theme.danger, fontWeight: "700" }}>
+                    Confirmar
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.btnOutline,
+                    { borderColor: theme.border, flex: 1, marginLeft: 6 },
+                  ]}
+                  onPress={() => setShowAvaliarSugestao(null)}
+                >
+                  <Text style={{ color: theme.text, fontWeight: "700" }}>
+                    Cancelar
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </BlurView>
+        </Modal>
+        {/* Modal: Nova Reserva */}
+        {/* Modal: Nova Reserva */}
+        <Modal visible={showNovaReserva} transparent animationType="slide">
+          <BlurView
+            intensity={20}
+            tint={isDark ? "dark" : "dark"}
+            style={styles.modalOverlay}
+          >
+            <View
+              style={[styles.modalContent, { backgroundColor: theme.card }]}
+            >
+              <Text
+                style={[
+                  styles.pageTitle,
+                  { color: theme.text, marginBottom: 5 },
+                ]}
+              >
+                Solicitar Reserva
+              </Text>
+
+              {/* SELEÇÃO DA DATA */}
+              <Text
+                style={{
+                  color: theme.text,
+                  fontSize: 12,
+                  marginBottom: 4,
+                  marginTop: 10,
+                  fontWeight: "600",
+                }}
+              >
+                Data da Reserva
+              </Text>
+              <TouchableOpacity
+                style={[
+                  styles.input,
+                  {
+                    borderColor: theme.border,
+                    backgroundColor: theme.bg,
+                    justifyContent: "center",
+                  },
+                ]}
+                onPress={() => setShowPicker("data")}
+              >
+                <Text style={{ color: theme.text, fontWeight: "bold" }}>
+                  {dataReserva.toLocaleDateString("pt-BR")}
+                </Text>
+              </TouchableOpacity>
+
+              {/* SELEÇÃO DO ESPAÇO (PÍLULAS) */}
+              <Text
+                style={{
+                  color: theme.text,
+                  fontSize: 12,
+                  marginBottom: 6,
+                  fontWeight: "600",
+                }}
+              >
+                Espaço Desejado
+              </Text>
+              <View
+                style={{
+                  flexDirection: "row",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  marginBottom: 15,
+                }}
+              >
+                {["Salão de Festas", "Churrasqueira", "Piscina"].map(
+                  (espaco) => (
+                    <TouchableOpacity
+                      key={espaco}
+                      onPress={() =>
+                        setNovaReserva({ ...novaReserva, titulo: espaco })
+                      }
+                      style={{
+                        paddingVertical: 8,
+                        paddingHorizontal: 12,
+                        borderRadius: 8,
+                        backgroundColor:
+                          novaReserva.titulo === espaco
+                            ? theme.primary[0]
+                            : theme.bg,
+                        borderWidth: 1,
+                        borderColor:
+                          novaReserva.titulo === espaco
+                            ? theme.primary[0]
+                            : theme.border,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color:
+                            novaReserva.titulo === espaco ? "#FFF" : theme.text,
+                          fontSize: 13,
+                          fontWeight: "bold",
+                        }}
+                      >
+                        {espaco}
+                      </Text>
+                    </TouchableOpacity>
+                  ),
+                )}
+              </View>
+
+              {/* SELEÇÃO DE HORÁRIOS */}
+              <View style={{ flexDirection: "row", gap: 10, marginBottom: 15 }}>
+                <View style={{ flex: 1 }}>
+                  <Text
+                    style={{
+                      color: theme.text,
+                      fontSize: 12,
+                      marginBottom: 4,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Hora Inicial
+                  </Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.input,
+                      {
+                        borderColor: theme.border,
+                        backgroundColor: theme.bg,
+                        justifyContent: "center",
+                        alignItems: "center",
+                      },
+                    ]}
+                    onPress={() => setShowPicker("inicio")}
+                  >
+                    <Text
+                      style={{
+                        color: novaReserva.horaInicio
+                          ? theme.text
+                          : theme.textMuted,
+                        fontWeight: "bold",
+                      }}
+                    >
+                      {novaReserva.horaInicio || "Selecionar"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text
+                    style={{
+                      color: theme.text,
+                      fontSize: 12,
+                      marginBottom: 4,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Hora Final
+                  </Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.input,
+                      {
+                        borderColor: theme.border,
+                        backgroundColor: theme.bg,
+                        justifyContent: "center",
+                        alignItems: "center",
+                      },
+                    ]}
+                    onPress={() => setShowPicker("fim")}
+                  >
+                    <Text
+                      style={{
+                        color: novaReserva.horaFim
+                          ? theme.text
+                          : theme.textMuted,
+                        fontWeight: "bold",
+                      }}
+                    >
+                      {novaReserva.horaFim || "Selecionar"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* RELÓGIO/CALENDÁRIO NATIVO (Oculto até ser chamado) */}
+              {showPicker && (
+                <DateTimePicker
+                  value={showPicker === "data" ? dataReserva : new Date()}
+                  mode={showPicker === "data" ? "date" : "time"}
+                  is24Hour={true}
+                  display="default"
+                  onChange={onPickerChange}
+                />
+              )}
+
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    color: theme.text,
+                    borderColor: theme.border,
+                    backgroundColor: theme.bg,
+                    height: 60,
+                    textAlignVertical: "top",
+                  },
+                ]}
+                placeholder="Detalhes adicionais (opcional)"
+                placeholderTextColor={theme.textMuted}
+                multiline
+                value={novaReserva.detalhes}
+                onChangeText={(t) =>
+                  setNovaReserva({ ...novaReserva, detalhes: t })
+                }
+              />
+
+              <View style={styles.row}>
+                <TouchableOpacity
+                  style={{ flex: 1, marginRight: 6 }}
+                  onPress={solicitarReserva}
+                >
+                  <LinearGradient
+                    colors={theme.primary as [string, string]}
+                    style={styles.btnGradient}
+                  >
+                    <Text style={styles.btnText}>Confirmar</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.btnOutline,
+                    { borderColor: theme.border, flex: 1, marginLeft: 6 },
+                  ]}
+                  onPress={() => setShowNovaReserva(false)}
+                >
+                  <Text style={{ color: theme.text, fontWeight: "700" }}>
+                    Cancelar
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </BlurView>
+        </Modal>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+// === ESTILOS MODERNOS ===
+const styles = StyleSheet.create({
+  safeArea: { flex: 1 },
+
+  // Login
+  loginContainer: { flex: 1, justifyContent: "center", padding: 24 },
+  iconWrapper: { alignItems: "center", marginBottom: 16 },
+  appName: {
+    fontSize: 32,
+    fontWeight: "900",
+    textAlign: "center",
+    marginBottom: 8,
+    letterSpacing: -0.5,
+  },
+  loginSubtitle: { fontSize: 16, textAlign: "center", marginBottom: 40 },
+  loginShortcuts: {
+    marginTop: 24,
+    paddingTop: 24,
+    borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
+  },
+
+  // Header Global
+  header: {
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === "android" ? 40 : 10,
+    paddingBottom: 15,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  headerTitle: { fontSize: 22, fontWeight: "800", letterSpacing: -0.5 },
+  iconBtn: { padding: 8, marginLeft: 8, borderRadius: 20 },
+
+  // Layout Base
+  contentContainer: { flex: 1, paddingHorizontal: 20, paddingTop: 10 },
+  pageHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 24,
+    marginTop: 10,
+  },
+  pageTitle: { fontSize: 26, fontWeight: "900", letterSpacing: -0.5 },
+  row: { flexDirection: "row", alignItems: "center" },
+  rowBetween: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+
+  // Cards Modernos
+  card: {
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 24,
+    marginBottom: 16,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  cardTitle: {
+    fontSize: 19,
+    fontWeight: "800",
+    marginTop: 16,
+    marginBottom: 8,
+    letterSpacing: -0.3,
+  },
+  cardText: { fontSize: 15, lineHeight: 24 },
+  tag: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  divider: { height: 1, width: "100%", marginVertical: 30 },
+
+  // Inputs e Botões
+  input: {
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 16,
+    fontSize: 16,
+  },
+  btnGradient: {
+    padding: 18,
+    borderRadius: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  btnText: { color: "#FFF", fontWeight: "800", fontSize: 16 },
+  btnOutline: {
+    padding: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  btnSmallGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  btnTextSmall: {
+    color: "#FFF",
+    fontWeight: "800",
+    fontSize: 14,
+    marginLeft: 6,
+  },
+
+  // Calendário
+  calendarContainer: {
+    borderWidth: 1,
+    borderRadius: 20,
+    overflow: "hidden",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.03,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  calendarWeekRow: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    paddingVertical: 14,
+  },
+  weekDayText: {
+    flex: 1,
+    textAlign: "center",
+    fontWeight: "700",
+    fontSize: 12,
+    textTransform: "uppercase",
+  },
+  calendarGrid: { flexDirection: "row", flexWrap: "wrap" },
+  dayBox: {
+    width: "14.28%",
+    height: 65,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  eventDot: { width: 6, height: 6, borderRadius: 3, marginTop: 6 },
+  eventDetailBox: {
+    padding: 20,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginTop: 15,
+  },
+
+  // Estante de Atas
+  book: {
+    width: 140,
+    height: 180,
+    marginRight: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    justifyContent: "center",
+    overflow: "hidden",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  bookTitle: { fontSize: 17, fontWeight: "900", marginBottom: 4 },
+  bookSubtitle: { fontSize: 13, fontWeight: "500" },
+  bookBinding: { position: "absolute", left: 0, top: 0, bottom: 0, width: 8 },
+
+  // Caixa de Sugestões
+  motivoBox: { marginTop: 20, padding: 16, borderRadius: 16, borderWidth: 1 },
+
+  // Tab Bar Flutuante
+  floatingTabBarContainer: {
+    position: "absolute",
+    bottom: Platform.OS === "ios" ? 30 : 20,
+    left: 20,
+    right: 20,
+  },
+  tabBar: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingVertical: 16,
+    borderRadius: 24,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  tabItem: { alignItems: "center", flex: 1 },
+  tabLabel: { fontSize: 12, fontWeight: "700", marginTop: 4 },
+
+  // Modais Glassmorphism
+  modalOverlay: { flex: 1, justifyContent: "center", padding: 20 },
+  modalContent: {
+    borderRadius: 28,
+    padding: 28,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.15,
+    shadowRadius: 30,
+    elevation: 15,
+  },
+});
