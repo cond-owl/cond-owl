@@ -2,10 +2,17 @@ import "react-native-url-polyfill/auto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createClient } from "@supabase/supabase-js";
 
-// Substitua estas strings pelas chaves do seu projeto Supabase
-const supabaseUrl = "https://bvurjcrovovofaszzddh.supabase.co";
-const supabaseAnonKey =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ2dXJqY3Jvdm92b2Zhc3p6ZGRoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI1MjA4NTgsImV4cCI6MjEwODA5Njg1OH0.P_CVyro1QIUzXSbXM9c2dhqkyS-kMIf7EelG0GSwGcw";
+// URL e chave anônima vêm do .env (EXPO_PUBLIC_*). A chave anônima é pública por
+// desenho: quem protege os dados é o RLS/permissões no banco, nunca a chave.
+// NUNCA colocar aqui a service_role.
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error(
+    "Defina EXPO_PUBLIC_SUPABASE_URL e EXPO_PUBLIC_SUPABASE_ANON_KEY no .env (veja .env.example).",
+  );
+}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {

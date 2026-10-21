@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import {
   StyleSheet,
   Text,
@@ -9,18 +8,36 @@ import {
   ScrollView,
   Modal,
   Alert,
-  SafeAreaView,
   StatusBar,
-  Platform,
   UIManager,
   LayoutAnimation,
+  useWindowDimensions,
 } from "react-native";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { Ionicons, Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import { Session } from "@supabase/supabase-js";
 import { supabase } from "../supabase"; // Ajuste o caminho se necessário
 import { Auth } from "../Auth"; // Ajuste o caminho se necessário
+import { PasswordInput } from "../components/password-input";
+import { DateTimeField } from "../components/date-time-field";
+import { ModalOverlay } from "../components/modal-overlay";
+import {
+  MESES,
+  DIAS_SEMANA,
+  chaveDe,
+  chaveData,
+  dataDaChave,
+  inicioDoDia,
+  diasNoMes,
+  formatarDataLonga,
+  formatarHora,
+  horaParaData,
+} from "../utils/calendario";
 
 // --- INTERFACES ---
 interface Comunicado {
@@ -32,10 +49,12 @@ interface Comunicado {
   vistoPor: string[];
 }
 interface Evento {
-  dia: number;
+  data: string; // AAAA-MM-DD
   tipo: string;
   titulo: string;
   detalhes: string;
+  horaInicio?: string;
+  horaFim?: string;
 }
 interface Reuniao {
   data: string;
@@ -53,9 +72,14 @@ interface Sugestao {
   motivo: string;
 }
 
+const ORIENTACOES: ("portrait" | "landscape")[] = ["portrait", "landscape"];
+
 export default function App() {
   // --- SISTEMA DE AUTENTICAÇÃO ---
   const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<string | null>(null);
+  const [isPending, setIsPending] = useState<boolean>(false);
+  const [nomeUsuario, setNomeUsuario] = useState("Morador");
 
   useEffect(() => {
     const organizarSessao = (sessaoDeAcesso: Session | null) => {
@@ -68,6 +92,17 @@ export default function App() {
         const status = metadata?.status_aprovacao || "pendente";
 
         setUser(role); // Define se é 'sindico' ou 'morador'
+
+        // Nome informado no cadastro (só o primeiro nome, mais amigável).
+        // Vem da sessão para aparecer já no primeiro login, sem depender de remontar a tela.
+        const nomeCadastro = String(metadata?.nome_completo ?? "").trim();
+        setNomeUsuario(
+          nomeCadastro
+            ? nomeCadastro.split(/\s+/)[0]
+            : role === "sindico"
+              ? "Síndico"
+              : "Morador",
+        );
 
         // Se for morador e ainda estiver pendente, bloqueia a tela
         if (role === "morador" && status === "pendente") {
@@ -97,28 +132,29 @@ export default function App() {
   // Se não estiver logado, bloqueia a tela e mostra o Login!
 
   // --------------------------------
-  const [user, setUser] = useState<string | null>(null);
   const [isDark, setIsDark] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<string>("feed");
   const [clickCount, setClickCount] = useState<number>(0);
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
-  const [nomeUsuario, setNomeUsuario] = useState("Morador");
-  useEffect(() => {
-    const buscarNome = async () => {
-      const { data } = await supabase.auth.getUser();
-      if (data?.user?.user_metadata?.nome_completo) {
-        // Pega apenas o primeiro nome para ficar mais amigável
-        const primeiroNome =
-          data.user.user_metadata.nome_completo.split(" ")[0];
-        setNomeUsuario(primeiroNome);
-      }
-    };
-    buscarNome();
-  }, []);
+
+  // --- RESPONSIVIDADE (celulares, tablets e PWA) ---
+  const { width: larguraTela } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const compacto = larguraTela < 360;
+  const tablet = larguraTela >= 768;
+  const larguraApp = tablet ? 860 : 600; // largura máxima do CONTEÚDO (o fundo é tela cheia)
+  const paddingLateral = compacto ? 14 : tablet ? 28 : 20;
+
+  // --- CALENDÁRIO: sempre parte do mês real atual ---
+  const hoje = inicioDoDia(new Date());
+  const hojeChave = chaveData(hoje);
+  const [mesVisivel, setMesVisivel] = useState(() => ({
+    ano: hoje.getFullYear(),
+    mes: hoje.getMonth(),
+  }));
 
   const [username, setUsername] = useState<string>("");
   const [password, setPassword] = useState<string>("");
-  const [isPending, setIsPending] = useState<boolean>(false);
 
   // --- ESTADO DA LISTA DE ESPERA (Agora começa vazia) ---
   const [moradoresPendentes, setMoradoresPendentes] = useState<any[]>([]);
@@ -183,19 +219,19 @@ export default function App() {
 
   const [eventos, setEventos] = useState<Evento[]>([
     {
-      dia: 15,
+      data: "2026-10-15",
       tipo: "manutencao",
       titulo: "Piscina Interditada",
       detalhes: "Limpeza e troca de filtros.",
     },
     {
-      dia: 20,
+      data: "2026-10-20",
       tipo: "reuniao",
       titulo: "Assembleia Geral",
       detalhes: "Horário: 19h30 no Salão de Festas.",
     },
     {
-      dia: 25,
+      data: "2026-10-25",
       tipo: "reserva",
       titulo: "Reserva Salão de Festas",
       detalhes: "Horário: 18h às 23h.",
@@ -236,7 +272,7 @@ export default function App() {
     },
   ]);
 
-  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedMesAta, setSelectedMesAta] = useState<string | null>(null);
   const [showNovoComunicado, setShowNovoComunicado] = useState<boolean>(false);
   const [showNovaSugestao, setShowNovaSugestao] = useState<boolean>(false);
@@ -245,39 +281,52 @@ export default function App() {
   );
   const [showNovaReserva, setShowNovaReserva] = useState<boolean>(false);
   const [dataReserva, setDataReserva] = useState<Date>(new Date());
-  const [showPicker, setShowPicker] = useState<
-    "data" | "inicio" | "fim" | null
-  >(null);
   const [novaReserva, setNovaReserva] = useState({
     titulo: "",
     detalhes: "",
     horaInicio: "",
     horaFim: "",
   });
-  const [showTimePicker, setShowTimePicker] = useState<"inicio" | "fim" | null>(
-    null,
-  );
 
-  // --- FUNÇÃO QUE CONTROLA O CALENDÁRIO E RELÓGIO ---
-  const onPickerChange = (event: any, selectedDate?: Date) => {
-    const currentMode = showPicker;
-    setShowPicker(null); // Oculta o modal nativo imediatamente para evitar bugs no Android
+  // Síndico enxerga o histórico; morador só vê de hoje em diante.
+  const podeVerPassado = user === "sindico";
+  const eventosVisiveis = podeVerPassado
+    ? eventos
+    : eventos.filter((e) => e.data >= hojeChave);
 
-    if (event.type === "set" && selectedDate) {
-      if (currentMode === "data") {
-        setDataReserva(selectedDate);
-      } else {
-        const horas = selectedDate.getHours().toString().padStart(2, "0");
-        const minutos = selectedDate.getMinutes().toString().padStart(2, "0");
-        const timeString = `${horas}:${minutos}`;
+  // Morador não navega para meses anteriores ao atual (vale também se o perfil mudar).
+  const indiceMes = (m: { ano: number; mes: number }) => m.ano * 12 + m.mes;
+  const mesAtual = { ano: hoje.getFullYear(), mes: hoje.getMonth() };
+  const mesExibido =
+    !podeVerPassado && indiceMes(mesVisivel) < indiceMes(mesAtual)
+      ? mesAtual
+      : mesVisivel;
+  const podeVoltarMes =
+    podeVerPassado || indiceMes(mesExibido) > indiceMes(mesAtual);
 
-        if (currentMode === "inicio") {
-          setNovaReserva((prev) => ({ ...prev, horaInicio: timeString }));
-        } else if (currentMode === "fim") {
-          setNovaReserva((prev) => ({ ...prev, horaFim: timeString }));
-        }
-      }
-    }
+  const mudarMes = (delta: number) => {
+    if (delta < 0 && !podeVoltarMes) return;
+    animate();
+    const indice = indiceMes(mesExibido) + delta;
+    setMesVisivel({ ano: Math.floor(indice / 12), mes: indice % 12 });
+  };
+
+  const abrirReserva = (chave: string) => {
+    setDataReserva(dataDaChave(chave));
+    setShowNovaReserva(true);
+  };
+
+  // Botão "Reservar": usa hoje se estiver no mês atual, senão o dia 1 do mês exibido.
+  const reservarNoMesExibido = () =>
+    abrirReserva(
+      indiceMes(mesExibido) === indiceMes(mesAtual)
+        ? hojeChave
+        : chaveDe(mesExibido.ano, mesExibido.mes, 1),
+    );
+
+  const aoTocarDia = (chave: string) => {
+    if (eventosVisiveis.some((e) => e.data === chave)) setSelectedDate(chave);
+    else if (chave >= hojeChave) abrirReserva(chave);
   };
 
   // --- FUNÇÃO QUE SALVA A RESERVA ---
@@ -290,7 +339,14 @@ export default function App() {
       return Alert.alert("Atenção", "Selecione o espaço e os horários.");
     }
 
-    const diaSelecionado = dataReserva.getDate();
+    const chaveReserva = chaveData(dataReserva);
+    if (chaveReserva < hojeChave) {
+      return Alert.alert(
+        "Atenção",
+        "Não é possível reservar em uma data que já passou.",
+      );
+    }
+
     const timeToMins = (time: string) => {
       const [h, m] = time.split(":").map(Number);
       return h * 60 + m;
@@ -306,11 +362,21 @@ export default function App() {
       );
     }
 
+    if (chaveReserva === hojeChave) {
+      const agora = new Date();
+      if (startMins <= agora.getHours() * 60 + agora.getMinutes()) {
+        return Alert.alert(
+          "Atenção",
+          "A hora inicial de uma reserva para hoje deve ser futura.",
+        );
+      }
+    }
+
     // Verifica Conflitos
-    const temConflito = eventos.some((ev: any) => {
+    const temConflito = eventos.some((ev) => {
       if (
         ev.tipo !== "reserva" ||
-        ev.dia !== diaSelecionado ||
+        ev.data !== chaveReserva ||
         ev.titulo !== novaReserva.titulo
       )
         return false;
@@ -329,14 +395,8 @@ export default function App() {
         "Este espaço já está reservado para este horário neste dia.",
       );
     }
-    const aprovarMorador = (id: string) => {
-      animate();
-      setMoradoresPendentes((prev) => prev.filter((m) => m.id !== id));
-      Alert.alert("Morador Aprovado", "O acesso foi libertado com sucesso.");
-    };
-
-    const novoEvento = {
-      dia: diaSelecionado,
+    const novoEvento: Evento = {
+      data: chaveReserva,
       tipo: "reserva",
       titulo: novaReserva.titulo,
       horaInicio: novaReserva.horaInicio,
@@ -345,6 +405,11 @@ export default function App() {
     };
 
     setEventos([...eventos, novoEvento]);
+    // Leva o calendário para o mês da reserva, para o usuário ver o que marcou.
+    setMesVisivel({
+      ano: dataReserva.getFullYear(),
+      mes: dataReserva.getMonth(),
+    });
     setShowNovaReserva(false);
     setNovaReserva({ titulo: "", detalhes: "", horaInicio: "", horaFim: "" });
     setDataReserva(new Date());
@@ -550,6 +615,16 @@ export default function App() {
         warning: "#D97706",
       };
 
+  // --- GRADE DO CALENDÁRIO (mês exibido) ---
+  const totalDiasMes = diasNoMes(mesExibido.ano, mesExibido.mes);
+  const deslocamentoMes = new Date(mesExibido.ano, mesExibido.mes, 1).getDay();
+  const totalCelulas = Math.ceil((deslocamentoMes + totalDiasMes) / 7) * 7;
+  const larguraGrade = Math.min(larguraTela, larguraApp) - paddingLateral * 2;
+  const alturaCelula = Math.min(
+    84,
+    Math.max(44, Math.round((larguraGrade / 7) * 0.95)),
+  );
+
   // --- TELA DE LOGIN ---
   if (!user) {
     return (
@@ -593,7 +668,7 @@ export default function App() {
               onChangeText={setUsername}
               autoCapitalize="none"
             />
-            <TextInput
+            <PasswordInput
               style={[
                 styles.input,
                 {
@@ -602,11 +677,11 @@ export default function App() {
                   backgroundColor: theme.bg,
                 },
               ]}
+              iconColor={theme.textMuted}
               placeholder="Senha"
               placeholderTextColor={theme.textMuted}
               value={password}
               onChangeText={setPassword}
-              secureTextEntry
             />
 
             <TouchableOpacity onPress={handleLogin} activeOpacity={0.8}>
@@ -676,23 +751,35 @@ export default function App() {
 
   // --- TELA PRINCIPAL ---
   return (
-    // 1. O fundo principal do navegador (ficará escuro nas laterais esquerdas e direitas no PC)
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#0f172a" }}>
-      {/* 2. O Contentor Responsivo do PWA */}
+    // 1. Fundo ocupa a tela toda (sem bordas laterais em iPad/PC): comportamento de app
+    <SafeAreaView
+      edges={["top", "left", "right"]}
+      style={{ flex: 1, backgroundColor: theme.bg }}
+    >
+      {/* 2. Contentor em tela cheia; só o conteúdo é limitado e centralizado */}
       <View
         style={{
           flex: 1,
           width: "100%",
-          maxWidth: 600, // Limita a largura num PC
-          alignSelf: "center", // Fica bem no meio da tela
           backgroundColor: theme.bg,
-          position: "relative", // Mantém o menu inferior preso a esta "caixa"
+          position: "relative", // Mantém o menu inferior preso a esta área
         }}
       >
         <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
 
         {/* HEADER GLOBAL (Agora com a logo da Coruja) */}
-        <View style={[styles.header, { backgroundColor: theme.bg }]}>
+        <View
+          style={[
+            styles.header,
+            {
+              backgroundColor: theme.bg,
+              paddingHorizontal: paddingLateral,
+              width: "100%",
+              maxWidth: larguraApp,
+              alignSelf: "center",
+            },
+          ]}
+        >
           <TouchableOpacity
             onPress={handleTitleClick}
             activeOpacity={1}
@@ -732,16 +819,21 @@ export default function App() {
         </View>
 
         <ScrollView
-          style={styles.contentContainer}
+          style={[styles.contentContainer, { paddingHorizontal: paddingLateral }]}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 120 }}
+          contentContainerStyle={{
+            paddingBottom: 110 + insets.bottom,
+            width: "100%",
+            maxWidth: larguraApp,
+            alignSelf: "center",
+          }}
         >
           {/* === ABA: FEED === */}
           {activeTab === "feed" && (
             <View>
               <View style={styles.pageHeader}>
                 {/* 👇 Bloco novo com o Nome e o Título juntos 👇 */}
-                <View>
+                <View style={{ flex: 1, marginRight: 12 }}>
                   <Text
                     style={{
                       fontSize: 18,
@@ -868,17 +960,54 @@ export default function App() {
           {activeTab === "calendario" && (
             <View>
               <View style={styles.pageHeader}>
-                <View>
+                <View style={{ flex: 1, marginRight: 12 }}>
                   <Text style={[styles.pageTitle, { color: theme.text }]}>
-                    Agenda do Mês
+                    Agenda
                   </Text>
-                  <Text style={{ color: theme.primary[0], fontWeight: "bold" }}>
-                    Outubro 26
-                  </Text>
+                  <View style={[styles.row, { marginTop: 4 }]}>
+                    <TouchableOpacity
+                      onPress={() => mudarMes(-1)}
+                      disabled={!podeVoltarMes}
+                      accessibilityRole="button"
+                      accessibilityLabel="Mês anterior"
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={[styles.mesBtn, !podeVoltarMes && { opacity: 0.3 }]}
+                    >
+                      <Feather
+                        name="chevron-left"
+                        size={22}
+                        color={theme.primary[0]}
+                      />
+                    </TouchableOpacity>
+                    <Text
+                      style={{
+                        color: theme.primary[0],
+                        fontWeight: "bold",
+                        fontSize: 16,
+                        minWidth: compacto ? 118 : 140,
+                        textAlign: "center",
+                      }}
+                    >
+                      {MESES[mesExibido.mes]} {mesExibido.ano}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => mudarMes(1)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Próximo mês"
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={styles.mesBtn}
+                    >
+                      <Feather
+                        name="chevron-right"
+                        size={22}
+                        color={theme.primary[0]}
+                      />
+                    </TouchableOpacity>
+                  </View>
                 </View>
                 {(user === "morador" || user === "sindico") && (
                   <TouchableOpacity
-                    onPress={() => setShowNovaReserva(true)}
+                    onPress={reservarNoMesExibido}
                     activeOpacity={0.8}
                   >
                     <LinearGradient
@@ -912,54 +1041,87 @@ export default function App() {
                     },
                   ]}
                 >
-                  {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map(
-                    (d, i) => (
-                      <Text
-                        key={i}
-                        style={[styles.weekDayText, { color: theme.textMuted }]}
-                      >
-                        {d}
-                      </Text>
-                    ),
-                  )}
+                  {DIAS_SEMANA.map((d, i) => (
+                    <Text
+                      key={i}
+                      style={[
+                        styles.weekDayText,
+                        { color: theme.textMuted },
+                        compacto && { fontSize: 10 },
+                      ]}
+                    >
+                      {d}
+                    </Text>
+                  ))}
                 </View>
 
                 <View style={styles.calendarGrid}>
-                  {Array.from({ length: 31 }).map((_, i) => {
-                    const dia = i + 1;
-                    const eventoDoDia = eventos.find((e) => e.dia === dia);
+                  {Array.from({ length: totalCelulas }).map((_, i) => {
+                    const dia = i - deslocamentoMes + 1;
+                    const celulaBase = [
+                      styles.dayBox,
+                      {
+                        height: alturaCelula,
+                        borderBottomColor: theme.border,
+                        borderRightColor: theme.border,
+                      },
+                    ];
+
+                    // Células vazias antes do dia 1 e depois do último dia
+                    if (dia < 1 || dia > totalDiasMes) {
+                      return <View key={`vazio-${i}`} style={celulaBase} />;
+                    }
+
+                    const chave = chaveDe(mesExibido.ano, mesExibido.mes, dia);
+                    const eventoDoDia = eventosVisiveis.some(
+                      (e) => e.data === chave,
+                    );
+                    const passado = chave < hojeChave;
+                    const ehHoje = chave === hojeChave;
                     return (
                       <TouchableOpacity
-                        key={dia}
+                        key={chave}
                         style={[
-                          styles.dayBox,
-                          {
-                            borderBottomColor: theme.border,
-                            borderRightColor: theme.border,
-                          },
+                          ...celulaBase,
                           eventoDoDia && {
                             backgroundColor: theme.primary[0] + "10",
                           },
+                          passado && { opacity: 0.5 },
                         ]}
-                        onPress={() =>
-                          eventoDoDia ? setSelectedDay(dia) : null
-                        }
+                        onPress={() => aoTocarDia(chave)}
                         activeOpacity={0.6}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${formatarDataLonga(chave)}${eventoDoDia ? ", com evento" : ""}`}
                       >
-                        <Text
-                          style={{
-                            color: eventoDoDia ? theme.primary[0] : theme.text,
-                            fontWeight: eventoDoDia ? "bold" : "500",
-                            fontSize: 15,
-                          }}
+                        <View
+                          style={[
+                            styles.dayNumber,
+                            ehHoje && { backgroundColor: theme.primary[0] },
+                          ]}
                         >
-                          {dia}
-                        </Text>
+                          <Text
+                            style={{
+                              color: ehHoje
+                                ? "#FFF"
+                                : eventoDoDia
+                                  ? theme.primary[0]
+                                  : theme.text,
+                              fontWeight: eventoDoDia || ehHoje ? "bold" : "500",
+                              fontSize: 15,
+                            }}
+                          >
+                            {dia}
+                          </Text>
+                        </View>
                         {eventoDoDia && (
                           <View
                             style={[
                               styles.eventDot,
-                              { backgroundColor: theme.primary[0] },
+                              {
+                                backgroundColor: passado
+                                  ? theme.textMuted
+                                  : theme.primary[0],
+                              },
                             ]}
                           />
                         )}
@@ -968,6 +1130,19 @@ export default function App() {
                   })}
                 </View>
               </View>
+
+              {podeVerPassado && (
+                <Text
+                  style={{
+                    color: theme.textMuted,
+                    fontSize: 12,
+                    marginTop: 12,
+                    textAlign: "center",
+                  }}
+                >
+                  Como síndico, você também vê meses e eventos passados.
+                </Text>
+              )}
             </View>
           )}
 
@@ -1195,17 +1370,10 @@ export default function App() {
               ))}
             </View>
           )}
-        </ScrollView>
-        {/* === ECRÃ DE APROVAÇÕES (Apenas Síndico) === */}
-        {activeTab === "aprovacoes" && user === "sindico" && (
-          <View
-            style={{
-              flex: 1,
-              minHeight: 800,
-              paddingHorizontal: 20,
-              paddingTop: 40,
-            }}
-          >
+          {/* === ECRÃ DE APROVAÇÕES (Apenas Síndico) === */}
+          {/* Fica dentro do mesmo ScrollView para rolar em telas pequenas */}
+          {activeTab === "aprovacoes" && user === "sindico" && (
+          <View style={{ paddingTop: 10 }}>
             <Text
               style={{
                 fontSize: 24,
@@ -1299,16 +1467,29 @@ export default function App() {
               ))
             )}
 
-            {/* Espaço "fantasma" obrigatório para o último item não ficar preso atrás do menu inferior */}
-            <View style={{ height: 150 }} />
           </View>
         )}
+        </ScrollView>
         {/* === BOTTOM TAB BAR (FLOATING & BLURRED) === */}
-        <View style={styles.floatingTabBarContainer}>
+        <View
+          style={[
+            styles.floatingTabBarContainer,
+            {
+              bottom: insets.bottom + 12,
+              left: compacto ? 12 : 20,
+              right: compacto ? 12 : 20,
+              alignItems: "center",
+            },
+          ]}
+          pointerEvents="box-none"
+        >
           <BlurView
             intensity={isDark ? 30 : 80}
             tint={isDark ? "dark" : "light"}
-            style={[styles.tabBar, { borderColor: theme.border }]}
+            style={[
+              styles.tabBar,
+              { borderColor: theme.border, width: "100%", maxWidth: 560 },
+            ]}
           >
             {[
               { id: "feed", icon: "home", label: "Mural" },
@@ -1377,12 +1558,14 @@ export default function App() {
         {/* ========================================== */}
 
         {/* Modal: Detalhes do Calendário */}
-        <Modal visible={!!selectedDay} transparent animationType="fade">
-          <BlurView
-            intensity={20}
-            tint={isDark ? "dark" : "dark"}
-            style={styles.modalOverlay}
-          >
+        <Modal
+          visible={!!selectedDate}
+          transparent
+          animationType="fade"
+          supportedOrientations={ORIENTACOES}
+          onRequestClose={() => setSelectedDate(null)}
+        >
+          <ModalOverlay>
             <View
               style={[
                 styles.modalContent,
@@ -1395,10 +1578,10 @@ export default function App() {
                   { color: theme.text, textAlign: "center", marginBottom: 20 },
                 ]}
               >
-                Dia {selectedDay} de Outubro
+                {selectedDate ? formatarDataLonga(selectedDate) : ""}
               </Text>
-              {eventos
-                .filter((e) => e.dia === selectedDay)
+              {eventosVisiveis
+                .filter((e) => e.data === selectedDate)
                 .map((e, idx) => (
                   <View
                     key={idx}
@@ -1436,28 +1619,55 @@ export default function App() {
                     </Text>
                   </View>
                 ))}
+              {selectedDate && selectedDate >= hojeChave && (
+                <TouchableOpacity
+                  style={[
+                    styles.btnOutline,
+                    {
+                      borderColor: theme.primary[0],
+                      marginTop: 24,
+                      backgroundColor: theme.primary[0] + "10",
+                    },
+                  ]}
+                  onPress={() => {
+                    const chave = selectedDate;
+                    setSelectedDate(null);
+                    abrirReserva(chave);
+                  }}
+                >
+                  <Text style={{ color: theme.primary[0], fontWeight: "700" }}>
+                    Reservar neste dia
+                  </Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 style={[
                   styles.btnOutline,
                   {
                     borderColor: theme.border,
-                    marginTop: 24,
+                    marginTop: selectedDate && selectedDate >= hojeChave ? 12 : 24,
                     backgroundColor: theme.bg,
                   },
                 ]}
-                onPress={() => setSelectedDay(null)}
+                onPress={() => setSelectedDate(null)}
               >
                 <Text style={{ color: theme.text, fontWeight: "700" }}>
                   Fechar
                 </Text>
               </TouchableOpacity>
             </View>
-          </BlurView>
+          </ModalOverlay>
         </Modal>
 
         {/* Modal: Nova Sugestão */}
-        <Modal visible={showNovaSugestao} transparent animationType="slide">
-          <BlurView intensity={20} tint="dark" style={styles.modalOverlay}>
+        <Modal
+          visible={showNovaSugestao}
+          transparent
+          animationType="slide"
+          supportedOrientations={ORIENTACOES}
+          onRequestClose={() => setShowNovaSugestao(false)}
+        >
+          <ModalOverlay>
             <View
               style={[styles.modalContent, { backgroundColor: theme.card }]}
             >
@@ -1521,15 +1731,17 @@ export default function App() {
                 </TouchableOpacity>
               </View>
             </View>
-          </BlurView>
+          </ModalOverlay>
         </Modal>
         {/* Modal: Novo Comunicado */}
-        <Modal visible={showNovoComunicado} transparent animationType="slide">
-          <BlurView
-            intensity={20}
-            tint={isDark ? "dark" : "dark"}
-            style={styles.modalOverlay}
-          >
+        <Modal
+          visible={showNovoComunicado}
+          transparent
+          animationType="slide"
+          supportedOrientations={ORIENTACOES}
+          onRequestClose={() => setShowNovoComunicado(false)}
+        >
+          <ModalOverlay>
             <View
               style={[styles.modalContent, { backgroundColor: theme.card }]}
             >
@@ -1650,16 +1862,18 @@ export default function App() {
                 </TouchableOpacity>
               </View>
             </View>
-          </BlurView>
+          </ModalOverlay>
         </Modal>
 
         {/* Modal: Ler Atas */}
-        <Modal visible={!!selectedMesAta} transparent animationType="fade">
-          <BlurView
-            intensity={20}
-            tint={isDark ? "dark" : "dark"}
-            style={styles.modalOverlay}
-          >
+        <Modal
+          visible={!!selectedMesAta}
+          transparent
+          animationType="fade"
+          supportedOrientations={ORIENTACOES}
+          onRequestClose={() => setSelectedMesAta(null)}
+        >
+          <ModalOverlay>
             <View
               style={[styles.modalContent, { backgroundColor: theme.card }]}
             >
@@ -1742,16 +1956,18 @@ export default function App() {
                 </Text>
               </TouchableOpacity>
             </View>
-          </BlurView>
+          </ModalOverlay>
         </Modal>
 
         {/* Modal: Motivo Arquivamento */}
-        <Modal visible={!!showAvaliarSugestao} transparent animationType="fade">
-          <BlurView
-            intensity={20}
-            tint={isDark ? "dark" : "dark"}
-            style={styles.modalOverlay}
-          >
+        <Modal
+          visible={!!showAvaliarSugestao}
+          transparent
+          animationType="fade"
+          supportedOrientations={ORIENTACOES}
+          onRequestClose={() => setShowAvaliarSugestao(null)}
+        >
+          <ModalOverlay>
             <View
               style={[styles.modalContent, { backgroundColor: theme.card }]}
             >
@@ -1815,16 +2031,17 @@ export default function App() {
                 </TouchableOpacity>
               </View>
             </View>
-          </BlurView>
+          </ModalOverlay>
         </Modal>
         {/* Modal: Nova Reserva */}
-        {/* Modal: Nova Reserva */}
-        <Modal visible={showNovaReserva} transparent animationType="slide">
-          <BlurView
-            intensity={20}
-            tint={isDark ? "dark" : "dark"}
-            style={styles.modalOverlay}
-          >
+        <Modal
+          visible={showNovaReserva}
+          transparent
+          animationType="slide"
+          supportedOrientations={ORIENTACOES}
+          onRequestClose={() => setShowNovaReserva(false)}
+        >
+          <ModalOverlay>
             <View
               style={[styles.modalContent, { backgroundColor: theme.card }]}
             >
@@ -1849,21 +2066,15 @@ export default function App() {
               >
                 Data da Reserva
               </Text>
-              <TouchableOpacity
-                style={[
-                  styles.input,
-                  {
-                    borderColor: theme.border,
-                    backgroundColor: theme.bg,
-                    justifyContent: "center",
-                  },
-                ]}
-                onPress={() => setShowPicker("data")}
-              >
-                <Text style={{ color: theme.text, fontWeight: "bold" }}>
-                  {dataReserva.toLocaleDateString("pt-BR")}
-                </Text>
-              </TouchableOpacity>
+              <DateTimeField
+                mode="date"
+                label="Data da reserva"
+                value={dataReserva}
+                minimumDate={hoje}
+                onChange={setDataReserva}
+                isDark={isDark}
+                colors={theme}
+              />
 
               {/* SELEÇÃO DO ESPAÇO (PÍLULAS) */}
               <Text
@@ -1934,29 +2145,24 @@ export default function App() {
                   >
                     Hora Inicial
                   </Text>
-                  <TouchableOpacity
-                    style={[
-                      styles.input,
-                      {
-                        borderColor: theme.border,
-                        backgroundColor: theme.bg,
-                        justifyContent: "center",
-                        alignItems: "center",
-                      },
-                    ]}
-                    onPress={() => setShowPicker("inicio")}
-                  >
-                    <Text
-                      style={{
-                        color: novaReserva.horaInicio
-                          ? theme.text
-                          : theme.textMuted,
-                        fontWeight: "bold",
-                      }}
-                    >
-                      {novaReserva.horaInicio || "Selecionar"}
-                    </Text>
-                  </TouchableOpacity>
+                  <DateTimeField
+                    mode="time"
+                    label="Hora inicial"
+                    value={
+                      novaReserva.horaInicio
+                        ? horaParaData(novaReserva.horaInicio)
+                        : null
+                    }
+                    onChange={(d) =>
+                      setNovaReserva((prev) => ({
+                        ...prev,
+                        horaInicio: formatarHora(d),
+                      }))
+                    }
+                    isDark={isDark}
+                    colors={theme}
+                    centered
+                  />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text
@@ -1969,42 +2175,26 @@ export default function App() {
                   >
                     Hora Final
                   </Text>
-                  <TouchableOpacity
-                    style={[
-                      styles.input,
-                      {
-                        borderColor: theme.border,
-                        backgroundColor: theme.bg,
-                        justifyContent: "center",
-                        alignItems: "center",
-                      },
-                    ]}
-                    onPress={() => setShowPicker("fim")}
-                  >
-                    <Text
-                      style={{
-                        color: novaReserva.horaFim
-                          ? theme.text
-                          : theme.textMuted,
-                        fontWeight: "bold",
-                      }}
-                    >
-                      {novaReserva.horaFim || "Selecionar"}
-                    </Text>
-                  </TouchableOpacity>
+                  <DateTimeField
+                    mode="time"
+                    label="Hora final"
+                    value={
+                      novaReserva.horaFim
+                        ? horaParaData(novaReserva.horaFim)
+                        : null
+                    }
+                    onChange={(d) =>
+                      setNovaReserva((prev) => ({
+                        ...prev,
+                        horaFim: formatarHora(d),
+                      }))
+                    }
+                    isDark={isDark}
+                    colors={theme}
+                    centered
+                  />
                 </View>
               </View>
-
-              {/* RELÓGIO/CALENDÁRIO NATIVO (Oculto até ser chamado) */}
-              {showPicker && (
-                <DateTimePicker
-                  value={showPicker === "data" ? dataReserva : new Date()}
-                  mode={showPicker === "data" ? "date" : "time"}
-                  is24Hour={true}
-                  display="default"
-                  onChange={onPickerChange}
-                />
-              )}
 
               <TextInput
                 style={[
@@ -2051,7 +2241,7 @@ export default function App() {
                 </TouchableOpacity>
               </View>
             </View>
-          </BlurView>
+          </ModalOverlay>
         </Modal>
       </View>
     </SafeAreaView>
@@ -2083,7 +2273,7 @@ const styles = StyleSheet.create({
   // Header Global
   header: {
     paddingHorizontal: 20,
-    paddingTop: Platform.OS === "android" ? 40 : 10,
+    paddingTop: 10, // a área segura do topo vem do SafeAreaView
     paddingBottom: 15,
     flexDirection: "row",
     justifyContent: "space-between",
@@ -2201,12 +2391,20 @@ const styles = StyleSheet.create({
   calendarGrid: { flexDirection: "row", flexWrap: "wrap" },
   dayBox: {
     width: "14.28%",
-    height: 65,
     borderRightWidth: 1,
     borderBottomWidth: 1,
     justifyContent: "center",
     alignItems: "center",
   },
+  dayNumber: {
+    minWidth: 30,
+    height: 30,
+    borderRadius: 15,
+    paddingHorizontal: 4,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  mesBtn: { padding: 4 },
   eventDot: { width: 6, height: 6, borderRadius: 3, marginTop: 6 },
   eventDetailBox: {
     padding: 20,
@@ -2239,9 +2437,6 @@ const styles = StyleSheet.create({
   // Tab Bar Flutuante
   floatingTabBarContainer: {
     position: "absolute",
-    bottom: Platform.OS === "ios" ? 30 : 20,
-    left: 20,
-    right: 20,
   },
   tabBar: {
     flexDirection: "row",
@@ -2255,10 +2450,12 @@ const styles = StyleSheet.create({
   tabLabel: { fontSize: 12, fontWeight: "700", marginTop: 4 },
 
   // Modais Glassmorphism
-  modalOverlay: { flex: 1, justifyContent: "center", padding: 20 },
   modalContent: {
+    width: "100%",
+    maxWidth: 520, // não estica em tablets/PC
+    alignSelf: "center",
     borderRadius: 28,
-    padding: 28,
+    padding: 24,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 20 },
     shadowOpacity: 0.15,
