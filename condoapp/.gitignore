@@ -44,3 +44,6 @@ example
 
 # variáveis locais (chaves)
 .env
+
+# Credenciais de teste locais (nunca versionar)
+supabase/user_test/
