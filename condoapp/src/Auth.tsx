@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -24,6 +24,56 @@ const SENHA_MIN = 8;
 const EMAIL_VALIDO = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 export function Auth() {
+  // --- BARREIRA DE CÓDIGO DO CONDOMÍNIO (LOCAL) ---
+  const CODIGO_VALIDO = "colinasderomaii.owl";
+  const CHAVE_STORAGE = "@condoowl:codigo_validado";
+
+  const [etapaAcesso, setEtapaAcesso] = useState<"codigo" | "login">("codigo");
+  const [codigoCondominio, setCodigoCondominio] = useState("");
+  const [erroCodigo, setErroCodigo] = useState("");
+
+  // Requisito 2: Se já validou antes, abre direto no login
+  useEffect(() => {
+    try {
+      if (typeof window !== "undefined" && window.localStorage) {
+        const codigoSalvo = window.localStorage.getItem(CHAVE_STORAGE);
+        if (codigoSalvo === CODIGO_VALIDO) {
+          setEtapaAcesso("login");
+        }
+      }
+    } catch (e) {}
+  }, []);
+
+  const handleValidarCodigo = () => {
+    const codigoLimpo = codigoCondominio.trim().toLowerCase();
+
+    if (!codigoLimpo) {
+      setErroCodigo("Digite o código do seu condomínio.");
+      return;
+    }
+
+    if (codigoLimpo === CODIGO_VALIDO) {
+      setErroCodigo("");
+      if (typeof window !== "undefined" && window.localStorage) {
+        window.localStorage.setItem(CHAVE_STORAGE, codigoLimpo);
+      }
+      setEtapaAcesso("login");
+    } else {
+      setErroCodigo("Código de condomínio incorreto ou não encontrado.");
+    }
+  };
+
+  // Requisito 1: Voltar para a tela de código
+  const handleVoltarParaCodigo = () => {
+    if (typeof window !== "undefined" && window.localStorage) {
+      window.localStorage.removeItem(CHAVE_STORAGE);
+    }
+    setCodigoCondominio("");
+    setErroCodigo("");
+    setEtapaAcesso("codigo");
+  };
+
+  // --- ESTADOS DO LOGIN ORIGINAL ---
   const [view, setView] = useState<
     "login" | "cadastro" | "esqueci" | "recuperar" | "confirmar_otp"
   >("login");
@@ -41,21 +91,18 @@ export function Auth() {
   const [nome, setNome] = useState("");
   const [nascimento, setNascimento] = useState("");
   const [celular, setCelular] = useState("");
-  const [unidade, setUnidade] = useState("Apto: "); // Atualizado com os dois pontos
-  const [manterConectado, setManterConectado] = useState(true);
+  const [unidade, setUnidade] = useState("Apto: ");
+  const [manterConectado, setManterConectado] = useState(false);
 
-  // --- RESPONSIVIDADE (celulares pequenos, tablets e PWA em tela cheia) ---
+  // --- RESPONSIVIDADE ---
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const compacto = width < 360;
   const tablet = width >= 768;
   const espacamento = compacto ? 16 : 24;
 
-  // --- MÁSCARAS E VALIDAÇÕES AUTOMÁTICAS ---
-  const formatarNome = (texto: string) => {
-    // Permite apenas letras (incluindo acentuadas) e espaços
-    return texto.replace(/[^a-zA-ZÀ-ÿ\s]/g, "");
-  };
+  // --- FUNÇÕES AUXILIARES ---
+  const formatarNome = (texto: string) => texto.replace(/[^a-zA-ZÀ-ÿ\s]/g, "");
 
   const formatarData = (texto: string) => {
     const num = texto.replace(/\D/g, "");
@@ -80,13 +127,8 @@ export function Auth() {
       setUnidade("Apto: ");
       return;
     }
-
-    // Pega tudo o que foi digitado após "Apto: " (os primeiros 6 caracteres)
     const valorDigitado = texto.substring(6);
-
-    // Remove qualquer coisa que não seja número (\D significa "não-dígito")
     const apenasNumeros = valorDigitado.replace(/\D/g, "");
-
     setUnidade("Apto: " + apenasNumeros);
   };
 
@@ -100,7 +142,7 @@ export function Auth() {
     setNome("");
     setNascimento("");
     setCelular("");
-    setUnidade("Apto: "); // Reseta sempre com a formatação correta
+    setUnidade("Apto: ");
   };
 
   const traduzirErro = (mensagemOriginal: string) => {
@@ -130,6 +172,7 @@ export function Auth() {
       email,
       password,
     });
+
     if (error) {
       if (error.message.includes("Email not confirmed")) {
         avisar(
@@ -139,6 +182,14 @@ export function Auth() {
         setView("confirmar_otp");
       } else {
         avisar("Erro no Login", traduzirErro(error.message));
+      }
+    } else {
+      // 👇 SUCESSO: Salva a preferência de manter a sessão 👇
+      if (typeof window !== "undefined" && window.localStorage) {
+        window.localStorage.setItem(
+          "@condoowl:manter_conectado",
+          manterConectado ? "true" : "false",
+        );
       }
     }
     setLoading(false);
@@ -182,7 +233,7 @@ export function Auth() {
           nome_completo: nome,
           data_nascimento: nascimento,
           celular: celular,
-          unidade: unidade, // Agora a unidade do Síndico também é guardada
+          unidade: unidade,
         },
       },
     });
@@ -268,8 +319,114 @@ export function Auth() {
     setLoading(false);
   };
 
+  // --- ETAPA 1: TELA DE CÓDIGO DO CONDOMÍNIO ---
+  if (etapaAcesso === "codigo") {
+    return (
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{
+          flex: 1,
+          backgroundColor: "#0f172a",
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
+        <View
+          style={{
+            width: "100%",
+            maxWidth: tablet ? 560 : 480,
+            alignItems: "center",
+            padding: espacamento,
+          }}
+        >
+          <MaterialCommunityIcons
+            name="owl"
+            size={compacto ? 60 : 80}
+            color="#818cf8"
+            style={{ marginBottom: 12 }}
+          />
+
+          <Text
+            style={{
+              fontSize: compacto ? 28 : 34,
+              fontWeight: "900",
+              color: "#f8fafc",
+              marginBottom: 8,
+            }}
+          >
+            Condo<Text style={{ color: "#818cf8" }}>Owl</Text>
+          </Text>
+
+          <Text
+            style={{
+              color: "#94a3b8",
+              fontSize: 15,
+              marginBottom: 28,
+              textAlign: "center",
+            }}
+          >
+            Informe o código de acesso do seu condomínio para acessar a área de
+            login.
+          </Text>
+
+          <View style={{ width: "100%", marginBottom: 16 }}>
+            <TextInput
+              style={{
+                backgroundColor: "#1e293b",
+                color: "#f8fafc",
+                width: "100%",
+                padding: 16,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: erroCodigo ? "#ef4444" : "#334155",
+                fontSize: 16,
+              }}
+              placeholder="Digite o código"
+              placeholderTextColor="#64748b"
+              value={codigoCondominio}
+              onChangeText={(text) => {
+                setCodigoCondominio(text);
+                if (erroCodigo) setErroCodigo("");
+              }}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            {erroCodigo ? (
+              <Text
+                style={{
+                  color: "#ef4444",
+                  fontSize: 13,
+                  marginTop: 6,
+                  marginLeft: 2,
+                }}
+              >
+                {erroCodigo}
+              </Text>
+            ) : null}
+          </View>
+
+          <TouchableOpacity
+            style={{
+              backgroundColor: "#6366f1",
+              width: "100%",
+              padding: 16,
+              borderRadius: 12,
+              alignItems: "center",
+            }}
+            onPress={handleValidarCodigo}
+          >
+            <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>
+              Acessar Condomínio
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    );
+  }
+
+  // --- ETAPA 2: FORMULÁRIO DE LOGIN/CADASTRO ---
   return (
-    // Adicionamos o backgroundColor aqui para garantir que o fundo escuro cubra o monitor todo
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={{ flex: 1, backgroundColor: "#0f172a" }}
@@ -286,7 +443,6 @@ export function Auth() {
         ]}
         keyboardShouldPersistTaps="handled"
       >
-        {/* 👇 O SEGREDO DO PWA: Este View limita a largura no PC/tablet e centraliza 👇 */}
         <View
           style={{
             width: "100%",
@@ -294,8 +450,9 @@ export function Auth() {
             alignSelf: "center",
           }}
         >
+          {/* LOGO */}
           <View
-            style={[styles.logoContainer, compacto && { marginBottom: 24 }]}
+            style={[styles.logoContainer, compacto && { marginBottom: 16 }]}
           >
             <MaterialCommunityIcons
               name="owl"
@@ -308,6 +465,40 @@ export function Auth() {
             </Text>
           </View>
 
+          {/* 🟢 BOTÃO DE TROCAR CONDOMÍNIO (ESTILO PÍLULA) 🟢 */}
+          <TouchableOpacity
+            onPress={handleVoltarParaCodigo}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              alignSelf: "center",
+              backgroundColor: "#1e293b",
+              borderWidth: 1,
+              borderColor: "#334155",
+              borderRadius: 24,
+              paddingVertical: 8,
+              paddingHorizontal: 16,
+              marginBottom: 24,
+            }}
+          >
+            <MaterialCommunityIcons
+              name="swap-horizontal"
+              size={18}
+              color="#818cf8"
+            />
+            <Text
+              style={{
+                color: "#cbd5e1",
+                marginLeft: 8,
+                fontWeight: "600",
+                fontSize: 13,
+              }}
+            >
+              Trocar condomínio
+            </Text>
+          </TouchableOpacity>
+
+          {/* CARTÃO DE LOGIN */}
           <View style={[styles.card, compacto && { padding: 16 }]}>
             {(view === "login" || view === "cadastro") && (
               <View style={styles.tabContainer}>
@@ -390,15 +581,13 @@ export function Auth() {
                   value={celular}
                   onChangeText={(text) => setCelular(formatarCelular(text))}
                 />
-
-                {/* O campo Apto agora aparece tanto para Morador quanto para Síndico */}
                 <TextInput
                   style={styles.input}
                   placeholder="Ex: Apto: 204"
                   placeholderTextColor="#64748b"
                   value={unidade}
                   onChangeText={lidarMudancaUnidade}
-                  keyboardType="numeric" // <-- Adicionado para forçar teclado numérico
+                  keyboardType="numeric"
                 />
               </>
             )}
@@ -587,7 +776,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 40,
+    marginBottom: 16,
   },
   logo: {
     fontSize: 44,
@@ -629,7 +818,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#0f172a",
     color: "#f8fafc",
     padding: 16,
-    fontSize: 16, // 16px evita o zoom automático do iOS ao focar o campo
+    fontSize: 16,
     borderRadius: 12,
     marginBottom: 16,
     borderWidth: 1,

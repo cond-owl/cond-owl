@@ -113,9 +113,28 @@ export default function App() {
       }
     };
 
-    supabase.auth
-      .getSession()
-      .then(({ data: { session } }) => organizarSessao(session));
+    const iniciarApp = async () => {
+      // 1. Aplica a trava do "Manter conectado"
+      if (typeof window !== "undefined" && window.localStorage) {
+        const manter = window.localStorage.getItem(
+          "@condoowl:manter_conectado",
+        );
+
+        if (manter === "false") {
+          await supabase.auth.signOut();
+          window.localStorage.removeItem("@condoowl:manter_conectado");
+          return; // Para aqui, pois o signOut disparará o onAuthStateChange abaixo
+        }
+      }
+
+      // 2. Se a trava não bloqueou, carrega a sessão normalmente
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      organizarSessao(session);
+    };
+
+    iniciarApp();
 
     const {
       data: { subscription },
@@ -713,7 +732,10 @@ export default function App() {
         </View>
 
         <ScrollView
-          style={[styles.contentContainer, { paddingHorizontal: paddingLateral }]}
+          style={[
+            styles.contentContainer,
+            { paddingHorizontal: paddingLateral },
+          ]}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{
             paddingBottom: 110 + insets.bottom,
@@ -879,7 +901,10 @@ export default function App() {
                       accessibilityRole="button"
                       accessibilityLabel="Mês anterior"
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      style={[styles.mesBtn, !podeVoltarMes && { opacity: 0.3 }]}
+                      style={[
+                        styles.mesBtn,
+                        !podeVoltarMes && { opacity: 0.3 },
+                      ]}
                     >
                       <Feather
                         name="chevron-left"
@@ -1014,7 +1039,8 @@ export default function App() {
                                 : eventoDoDia
                                   ? theme.primary[0]
                                   : theme.text,
-                              fontWeight: eventoDoDia || ehHoje ? "bold" : "500",
+                              fontWeight:
+                                eventoDoDia || ehHoje ? "bold" : "500",
                               fontSize: 15,
                             }}
                           >
@@ -1281,108 +1307,107 @@ export default function App() {
           {/* === ECRÃ DE APROVAÇÕES (Apenas Síndico) === */}
           {/* Fica dentro do mesmo ScrollView para rolar em telas pequenas */}
           {activeTab === "aprovacoes" && user === "sindico" && (
-          <View style={{ paddingTop: 10 }}>
-            <Text
-              style={{
-                fontSize: 24,
-                fontWeight: "bold",
-                color: theme.text,
-                marginBottom: 20,
-              }}
-            >
-              Aprovar Moradores
-            </Text>
-
-            {erroPendentes !== "" && (
-              <Text style={{ color: theme.danger, marginBottom: 12 }}>
-                {erroPendentes}
-              </Text>
-            )}
-
-            {moradoresPendentes.length === 0 ? (
+            <View style={{ paddingTop: 10 }}>
               <Text
                 style={{
-                  color: theme.textMuted,
-                  textAlign: "center",
-                  marginTop: 20,
+                  fontSize: 24,
+                  fontWeight: "bold",
+                  color: theme.text,
+                  marginBottom: 20,
                 }}
               >
-                Nenhum morador a aguardar aprovação.
+                Aprovar Moradores
               </Text>
-            ) : (
-              moradoresPendentes.map((morador) => (
-                <View
-                  key={morador.id}
-                  style={[
-                    styles.card,
-                    {
-                      backgroundColor: theme.card,
-                      borderColor: theme.border,
-                      marginBottom: 12,
-                    },
-                  ]}
+
+              {erroPendentes !== "" && (
+                <Text style={{ color: theme.danger, marginBottom: 12 }}>
+                  {erroPendentes}
+                </Text>
+              )}
+
+              {moradoresPendentes.length === 0 ? (
+                <Text
+                  style={{
+                    color: theme.textMuted,
+                    textAlign: "center",
+                    marginTop: 20,
+                  }}
                 >
-                  <Text
-                    style={{
-                      color: theme.text,
-                      fontWeight: "bold",
-                      fontSize: 18,
-                      marginBottom: 4,
-                    }}
+                  Nenhum morador a aguardar aprovação.
+                </Text>
+              ) : (
+                moradoresPendentes.map((morador) => (
+                  <View
+                    key={morador.id}
+                    style={[
+                      styles.card,
+                      {
+                        backgroundColor: theme.card,
+                        borderColor: theme.border,
+                        marginBottom: 12,
+                      },
+                    ]}
                   >
-                    {morador.nome_completo || "Nome não informado"}
-                  </Text>
-
-                  <Text
-                    style={{
-                      color: theme.textMuted,
-                      fontSize: 14,
-                      marginBottom: 2,
-                    }}
-                  >
-                    E-mail: {morador.email}
-                  </Text>
-
-                  <Text
-                    style={{
-                      color: theme.textMuted,
-                      fontSize: 14,
-                      marginBottom: 2,
-                    }}
-                  >
-                    Nascimento: {morador.data_nascimento || "Não informada"}
-                  </Text>
-
-                  <Text
-                    style={{
-                      color: theme.textMuted,
-                      fontSize: 14,
-                      marginBottom: 16,
-                    }}
-                  >
-                    Unidade: {morador.unidade}
-                  </Text>
-
-                  <TouchableOpacity
-                    style={{
-                      backgroundColor: theme.success,
-                      width: "100%",
-                      alignItems: "center",
-                      padding: 12,
-                      borderRadius: 8,
-                    }}
-                    onPress={() => aprovarMorador(morador.id)}
-                  >
-                    <Text style={{ color: "#fff", fontWeight: "bold" }}>
-                      Aprovar Acesso
+                    <Text
+                      style={{
+                        color: theme.text,
+                        fontWeight: "bold",
+                        fontSize: 18,
+                        marginBottom: 4,
+                      }}
+                    >
+                      {morador.nome_completo || "Nome não informado"}
                     </Text>
-                  </TouchableOpacity>
-                </View>
-              ))
-            )}
 
-          </View>
-        )}
+                    <Text
+                      style={{
+                        color: theme.textMuted,
+                        fontSize: 14,
+                        marginBottom: 2,
+                      }}
+                    >
+                      E-mail: {morador.email}
+                    </Text>
+
+                    <Text
+                      style={{
+                        color: theme.textMuted,
+                        fontSize: 14,
+                        marginBottom: 2,
+                      }}
+                    >
+                      Nascimento: {morador.data_nascimento || "Não informada"}
+                    </Text>
+
+                    <Text
+                      style={{
+                        color: theme.textMuted,
+                        fontSize: 14,
+                        marginBottom: 16,
+                      }}
+                    >
+                      Unidade: {morador.unidade}
+                    </Text>
+
+                    <TouchableOpacity
+                      style={{
+                        backgroundColor: theme.success,
+                        width: "100%",
+                        alignItems: "center",
+                        padding: 12,
+                        borderRadius: 8,
+                      }}
+                      onPress={() => aprovarMorador(morador.id)}
+                    >
+                      <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                        Aprovar Acesso
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ))
+              )}
+            </View>
+          )}
         </ScrollView>
         {/* === BOTTOM TAB BAR (FLOATING & BLURRED) === */}
         <View
@@ -1559,7 +1584,8 @@ export default function App() {
                   styles.btnOutline,
                   {
                     borderColor: theme.border,
-                    marginTop: selectedDate && selectedDate >= hojeChave ? 12 : 24,
+                    marginTop:
+                      selectedDate && selectedDate >= hojeChave ? 12 : 24,
                     backgroundColor: theme.bg,
                   },
                 ]}
