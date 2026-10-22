@@ -1,25 +1,48 @@
 # Auditoria de segurança — achados e propostas
 
-Auditoria feita sobre o que já existe no app. **Nenhuma proposta abaixo está
-aplicada** (exceto a Seção 5, que não muda a lógica). Cada item diz o problema, a
+Auditoria feita sobre o que já existe no app. **Os itens marcados como Aplicado já estão
+no código e no banco novo; os demais seguem como proposta.** Cada item diz o problema, a
 proposta, o que muda para o usuário e o que depende do banco, para você decidir.
 
-`hardening.sql` (nesta pasta) é o script do banco que acompanha as propostas 1 a 3.
-Ele **não foi executado** em nenhum ambiente.
+## Banco novo e separado
+
+O projeto Supabase atual **não é alterado** por esta branch. As migrações em
+`migrations/` montam um banco **novo e vazio** (um projeto Supabase novo, ou um
+ambiente local com `supabase start`). Elas são ordenadas e cada uma tem um assunto:
+
+| Arquivo | Conteúdo |
+|---------|----------|
+| `0001_extensoes_e_segredos` | `pgcrypto`, `btree_gist` e `app_secrets` (hash do código de síndico) |
+| `0002_funcoes_de_permissao` | `is_sindico()` e `is_aprovado()`, lidas do token |
+| `0003_perfis_e_cadastro` | `perfis` e gatilhos que definem perfil/aprovação no cadastro |
+| `0004_rpcs_do_sindico` | `get_moradores_pendentes` e `aprovar_acesso_morador` |
+| `0005_comunicados` | `comunicados` e `comunicados_vistos` |
+| `0006_eventos_e_reservas` | `eventos`, com bloqueio de reserva em conflito |
+| `0007_atas` | `atas` |
+| `0008_sugestoes` | `sugestoes` |
+| `0009_condominios` | `condominios` (nome e código único, normalizado); só o síndico escreve, só aprovados leem |
+| `0010_condominio_colinas_de_roma` | dado inicial: condomínio "Colinas de Roma" |
+| `0011_perfis_condominio` | `perfis.condominio_id` (FK para `condominios`); o usuário não consegue alterar |
+
+Aplicar em ordem. Para dados de teste, `seeds/dev_usuarios_colinas_de_roma.sql` (não é migração; nunca em produção) cria 1 síndico e 2 moradores no condomínio, com senhas geradas na hora e mostradas só uma vez. Nada foi executado em Supabase real: foram validadas num Postgres
+descartável (Docker) com um `auth` simulado. Depois de aplicar, definir o código de
+síndico (comentado no `0001`) e apontar o `.env` do app para o projeto novo.
+Para a próxima mudança, criar uma migração nova, sem editar as existentes.
+
 
 ## Resumo
 
 | # | Achado | Gravidade | Estado |
 |---|--------|-----------|--------|
-| 1 | Perfil (síndico/morador) e aprovação decididos pelo cliente | Crítico | Proposta |
-| 2 | Código de síndico `OWL2026` no código do app | Crítico | Proposta |
-| 3 | RPCs de aprovação respondem sem login | Crítico | Proposta |
-| 4 | Login de teste `sindico/123` e atalhos | Alto | Proposta |
+| 1 | Perfil (síndico/morador) e aprovação decididos pelo cliente | Crítico | **Aplicado** |
+| 2 | Código de síndico `OWL2026` no código do app | Crítico | **Aplicado** |
+| 3 | RPCs de aprovação respondem sem login | Crítico | **Aplicado** |
+| 4 | Login de teste `sindico/123` e atalhos | Alto | **Aplicado** |
 | 5 | Chave anônima escrita no código | Alto | **Aplicado** |
-| 6 | Painel "Admin" escondido (7 cliques no título) | Médio | Proposta |
-| 7 | Senha mínima 6, sem validação de e-mail | Médio | Proposta |
-| 8 | Recuperação de senha revela se o e-mail tem conta | Baixo | Proposta |
-| 9 | `console.log` de erro numa chamada com dados pessoais | Baixo | Proposta |
+| 6 | Painel "Admin" escondido (7 cliques no título) | Médio | **Mantido** (decisão) |
+| 7 | Senha mínima 6, sem validação de e-mail | Médio | **Aplicado no app** · painel pendente |
+| 8 | Recuperação de senha revela se o e-mail tem conta | Baixo | **Aplicado** |
+| 9 | `console.log` de erro numa chamada com dados pessoais | Baixo | **Aplicado** |
 
 ## 1. Perfil e aprovação decididos pelo cliente — Crítico
 
@@ -35,8 +58,23 @@ análise (nega por padrão).
 
 **Para o usuário:** a tela de aprovação e o botão "Aprovar Acesso" continuam iguais.
 
-**Depende do banco:** sim (`hardening.sql`, seções 2 e 3). Sem ele aplicado, todos
-cairiam como morador pendente, inclusive o síndico atual.
+**Aplicado no app (branch `fix/0001-vulnerabilidade-perfil-aprovacao`):**
+- `index.tsx` lê `role` e `status_aprovacao` de `app_metadata`. Qualquer valor
+  diferente de `sindico` vira morador; morador só entra com `status_aprovacao =
+  aprovado` (nega por padrão). `user_metadata` ficou só para nome de exibição.
+- `Auth.tsx` não envia mais `role` nem `status_aprovacao`. No cadastro de síndico
+  envia apenas `codigo_sindico` (o digitado); quem decide é o gatilho do banco.
+- A checagem do código no login foi removida: era validação do cliente, sem efeito
+  de segurança, e o campo agora só aparece no cadastro.
+
+**Depende do banco:** sim (migrações 001 a 004). O banco é novo (só
+Authentication, sem tabelas), então o script é uma instalação limpa: não há usuários
+a migrar. **Rodar antes de usar o cadastro.** Sem ele, todos caem como morador
+pendente e o cadastro de síndico não gera perfil de síndico. Contas de teste criadas
+antes do gatilho devem ser apagadas e recriadas.
+
+**Efeito de borda:** `app_metadata` vem no token. Ao aprovar um morador, ele só
+enxerga a aprovação depois de sair e entrar de novo (ou do refresh do token).
 
 ## 2. Código de síndico `OWL2026` no código do app — Crítico
 
@@ -50,7 +88,7 @@ Trocar o código por um novo.
 **Para o usuário:** o fluxo de cadastro de síndico é o mesmo. O código novo precisa
 ser entregue por fora do app.
 
-**Depende do banco:** sim (`hardening.sql`, seções 1 e 2).
+**Depende do banco:** sim (migrações 001 e 003).
 
 ## 3. RPCs de aprovação respondem sem login — Crítico
 
@@ -63,10 +101,12 @@ possível que nome, e-mail, nascimento e unidade fiquem expostos. Não testei
 
 **Para o usuário:** nada muda para o síndico.
 
-**Depende do banco:** sim (`hardening.sql`, seção 4). O script recria as duas
-funções com corpos que escrevi a partir do uso no app. **Conferir com as definições
-atuais** (`\sf public.get_moradores_pendentes`) antes de rodar. Se o retorno for
-diferente, o `CREATE OR REPLACE` falha em vez de sobrescrever.
+**Depende do banco:** sim (migração 004). Como o banco é novo, a migração
+cria as duas funções do zero, com corpos escritos a partir do uso no app.
+
+**Aplicado:** migração `0004`. No projeto novo, as duas RPCs respondem 401 (`42501`) à
+chave anônima, conferido por chamada direta. Quem decide é `is_sindico()`, lida do
+token (`app_metadata`), que o usuário não consegue editar.
 
 ## 4. Login de teste `sindico/123` e atalhos — Alto
 
@@ -78,6 +118,11 @@ quase inalcançável, mas é credencial fixa no código.
 `password` associados.
 
 **Para o usuário:** nenhuma mudança visível.
+
+**Aplicado:** removidos a tela de login de teste, os atalhos "Acesso rápido", o
+`handleLogin` e os estados `username`/`password`, mais os estilos e o import que
+ficaram sem uso. Sem perfil resolvido, o app não mostra nada (`return null`), em vez
+de oferecer um login alternativo.
 
 ## 5. Chave anônima escrita no código — Alto — APLICADO
 
@@ -99,7 +144,7 @@ dados; é só um atalho escondido sem controle de acesso.
 
 **Proposta:** remover o clique e a aba, ou, se for ficar, restringir ao síndico.
 
-**Decisão sua:** manter ou remover.
+**Decisão:** mantido como está. O motivo é que a aba não abre tela nem expõe dado. Se isso mudar (por exemplo, a aba passar a abrir algo), restringir ao síndico: `showAdmin && user === "sindico"`.
 
 ## 7. Senha mínima 6, sem validação de e-mail — Médio
 
@@ -109,6 +154,13 @@ dados; é só um atalho escondido sem controle de acesso.
 do Supabase (Authentication > Passwords), onde a regra vale de verdade. No cliente
 ela é só conveniência.
 
+**Aplicado no app:** `Auth.tsx` exige e-mail em formato válido e senha de no mínimo 8
+caracteres no cadastro, e a mesma senha mínima na redefinição (checada antes de gastar
+o código de uso único). O texto de erro e os placeholders mostram o mínimo.
+
+**Pendente, no painel do Supabase:** Authentication > Passwords > mínimo 8 e "Prevent
+leaked passwords". Sem isso, quem chamar a API direto ainda pode cadastrar senha curta.
+
 ## 8. Recuperação de senha revela se o e-mail tem conta — Baixo
 
 **Hoje:** a mensagem "Código enviado" só aparece para e-mails cadastrados, o que
@@ -117,11 +169,23 @@ permite descobrir quem tem conta.
 **Proposta:** mensagem sempre igual ("Se o e-mail estiver cadastrado, enviamos um
 código").
 
+**Aplicado:** a resposta é sempre "Se o e-mail estiver cadastrado, enviamos um
+código". O servidor já responde 200 igual para e-mail sem conta (conferido), então a
+única diferença visível vinha da mensagem do app. Erro de envio (rede ou limite) usa
+um texto único, que não depende de a conta existir.
+
+**Corrigido junto:** `Alert.alert` não exibe nada no navegador (react-native-web),
+então erros de login, cadastro e recuperação sumiam no PWA. Todos os avisos passam
+por `src/utils/avisar.ts` (`window.alert` no web, `Alert` nativo no celular).
+
 ## 9. `console.log` de erro numa chamada com dados pessoais — Baixo
 
 **Hoje:** `buscarPendentes` imprime o erro completo no console.
 
 **Proposta:** trocar por um aviso genérico ao usuário.
+
+**Aplicado:** sem `console.log`; a aba de aprovações mostra "Não foi possível carregar
+a lista de moradores." Os dados pessoais não vão para o console.
 
 ## Configurações no painel do Supabase (não são código)
 
@@ -130,8 +194,39 @@ código").
 - Site URL e Redirect URLs só do domínio do PWA.
 - Login anônimo desligado; confirmação de e-mail mantida ligada.
 
-## Quando criar tabelas (comunicados, reservas, sugestões)
+## Banco: tabelas e por que são assim
 
-Hoje esses dados vivem só na memória do app, então não há vazamento. Ao levá-los para
-o banco, ligar RLS em cada tabela com policies explícitas. Sem RLS, a chave anônima
-dá acesso direto à tabela.
+A migração cria o esquema que o app vai precisar. **Só os comunicados estão ligados ao app** (listar, publicar e marcar como visto). **Ainda em memória, sem usar o banco:**
+calendário, reservas, atas e sugestões, até a
+próxima etapa. Todas as tabelas têm RLS ligado; sem policy, a chave anônima não
+acessa nada.
+
+| Tabela | Quem lê | Quem escreve |
+|--------|---------|--------------|
+| `perfis` (nome, nascimento, celular, unidade, e-mail) | o próprio usuário; síndico lê todos | o usuário altera só nome e celular; criada por gatilho no cadastro |
+| `condominios` (nome, código) | síndico e moradores aprovados | só síndico; código único, em minúsculas |
+| `comunicados` / `comunicados_vistos` | síndico e moradores aprovados | só síndico publica; cada um registra o seu "visto" |
+| `eventos` (inclui reservas) | síndico e moradores aprovados | síndico cria qualquer um; morador aprovado só reserva em seu nome, de hoje em diante |
+| `atas` | síndico e moradores aprovados | só síndico |
+| `sugestoes` | síndico e moradores aprovados | morador envia (sempre pendente); só síndico avalia |
+| `app_secrets` | ninguém pela API | hash do código de síndico, só por SQL |
+
+Decisões:
+- **Perfil e aprovação só em `app_metadata`**, não em `perfis`. Assim há uma fonte
+  única, e as policies leem do token sem consultar tabela. `perfis` guarda só dados
+  pessoais.
+- **Unidade não é editável pelo morador:** o síndico aprova com base nela; mudar
+  depois anularia a verificação.
+- **Conflito de reserva é do banco** (constraint de exclusão: mesmo espaço, horários
+  que se cruzam). A checagem do app é só aviso rápido; duas pessoas reservando ao
+  mesmo tempo não passam pelo banco.
+- **Data da reserva usa o fuso de Brasília**, não o do servidor, para não recusar
+  reserva do próprio dia à noite.
+- **Cadastro com código de síndico errado é recusado** pelo banco; o Auth devolve
+  "Database error saving new user", que o app traduz.
+- Token é emitido com `app_metadata` fixo: aprovação só aparece depois de novo login.
+
+
+Como validar de novo: subir um Postgres descartável, criar um `auth` simulado
+(`auth.users`, `auth.uid()`, `auth.jwt()`) e rodar a migração e cenários de cadastro,
+promoção indevida, RPCs, reservas conflitantes e `anon`. Foi o que se fez; passou.

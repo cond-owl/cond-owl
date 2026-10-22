@@ -4,7 +4,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
   StyleSheet,
   ScrollView,
@@ -17,8 +16,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "./supabase";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { PasswordInput } from "./components/password-input";
+import { avisar } from "./utils/avisar";
 
-const CODIGO_SECRETO_SINDICO = "OWL2026";
+// Regras de senha e e-mail no cliente: só conveniência. Quem vale é o painel do Supabase
+// (Authentication > Passwords); mantenha o mesmo mínimo lá.
+const SENHA_MIN = 8;
+const EMAIL_VALIDO = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 export function Auth() {
   const [view, setView] = useState<
@@ -107,28 +110,21 @@ export function Auth() {
     if (msg.includes("invalid login credentials"))
       return "E-mail ou senha incorretos.";
     if (msg.includes("password should be at least"))
-      return "A senha deve ter no mínimo 6 caracteres.";
+      return `A senha deve ter no mínimo ${SENHA_MIN} caracteres.`;
     if (msg.includes("email not confirmed"))
       return "E-mail não verificado. Por favor, valide o seu código.";
     if (msg.includes("invalid otp")) return "Código inválido ou expirado.";
+    // O gatilho do banco recusa o cadastro com código de síndico errado.
+    if (msg.includes("database error saving new user"))
+      return "Não foi possível criar a conta. Se for síndico, confira o código único.";
     return "Ocorreu um erro inesperado. Tente novamente.";
-  };
-
-  const validarAcessoSindico = () => {
-    if (tipoUsuario === "sindico" && codigoSindico !== CODIGO_SECRETO_SINDICO) {
-      Alert.alert("Acesso Negado", "O código único de síndico está incorreto.");
-      return false;
-    }
-    return true;
   };
 
   const fazerLogin = async () => {
     if (!email || !password) {
-      Alert.alert("Atenção", "Preencha o e-mail e a senha.");
+      avisar("Atenção", "Preencha o e-mail e a senha.");
       return;
     }
-    if (!validarAcessoSindico()) return;
-
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword({
       email,
@@ -136,13 +132,13 @@ export function Auth() {
     });
     if (error) {
       if (error.message.includes("Email not confirmed")) {
-        Alert.alert(
+        avisar(
           "E-mail não verificado",
           "Insira o código que enviámos para o seu e-mail.",
         );
         setView("confirmar_otp");
       } else {
-        Alert.alert("Erro no Login", traduzirErro(error.message));
+        avisar("Erro no Login", traduzirErro(error.message));
       }
     }
     setLoading(false);
@@ -150,27 +146,39 @@ export function Auth() {
 
   const fazerCadastro = async () => {
     if (!nome || !nascimento || !celular || !email || !password) {
-      Alert.alert("Atenção", "Por favor, preencha todos os dados pessoais.");
+      avisar("Atenção", "Por favor, preencha todos os dados pessoais.");
       return;
     }
     if (unidade === "Apto: " || unidade.trim() === "Apto:") {
-      Alert.alert("Atenção", "Por favor, informe o número do seu Apartamento.");
+      avisar("Atenção", "Por favor, informe o número do seu Apartamento.");
+      return;
+    }
+    if (!EMAIL_VALIDO.test(email.trim())) {
+      avisar("Atenção", "Informe um e-mail válido.");
+      return;
+    }
+    if (password.length < SENHA_MIN) {
+      avisar("Atenção", `A senha deve ter no mínimo ${SENHA_MIN} caracteres.`);
       return;
     }
     if (password !== confirmPassword) {
-      Alert.alert("Atenção", "As senhas não coincidem. Verifique a digitação.");
+      avisar("Atenção", "As senhas não coincidem. Verifique a digitação.");
       return;
     }
-    if (!validarAcessoSindico()) return;
+    if (tipoUsuario === "sindico" && !codigoSindico) {
+      avisar("Atenção", "Informe o código único de síndico.");
+      return;
+    }
 
     setLoading(true);
     const { error } = await supabase.auth.signUp({
-      email,
+      email: email.trim(),
       password,
       options: {
         data: {
-          role: tipoUsuario,
-          status_aprovacao: tipoUsuario === "sindico" ? "aprovado" : "pendente",
+          // Perfil e aprovação são definidos pelo banco (gatilho em auth.users);
+          // o app só envia o código digitado, que o servidor valida.
+          ...(tipoUsuario === "sindico" && { codigo_sindico: codigoSindico }),
           nome_completo: nome,
           data_nascimento: nascimento,
           celular: celular,
@@ -180,9 +188,9 @@ export function Auth() {
     });
 
     if (error) {
-      Alert.alert("Erro no Cadastro", traduzirErro(error.message));
+      avisar("Erro no Cadastro", traduzirErro(error.message));
     } else {
-      Alert.alert(
+      avisar(
         "Quase lá!",
         "Enviámos um código para o seu e-mail. Confirme para finalizar a criação da conta.",
       );
@@ -194,7 +202,7 @@ export function Auth() {
 
   const confirmarCadastroOTP = async () => {
     if (!token || token.length < 6) {
-      Alert.alert("Atenção", "Digite o código recebido no e-mail.");
+      avisar("Atenção", "Digite o código recebido no e-mail.");
       return;
     }
     setLoading(true);
@@ -204,26 +212,42 @@ export function Auth() {
       type: "signup",
     });
     if (error) {
-      Alert.alert("Erro", traduzirErro(error.message));
+      avisar("Erro", traduzirErro(error.message));
     } else {
-      Alert.alert("Sucesso!", "Conta verificada! Já pode entrar no app.");
+      avisar("Sucesso!", "Conta verificada! Já pode entrar no app.");
       mudarTela("login");
     }
     setLoading(false);
   };
 
   const pedirCodigo = async () => {
+    if (!email.trim()) {
+      avisar("Atenção", "Informe o seu e-mail.");
+      return;
+    }
     setLoading(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    if (error) Alert.alert("Erro", traduzirErro(error.message));
-    else {
-      Alert.alert("Sucesso", "Código enviado para o seu e-mail.");
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+    if (error) {
+      // Mensagem única: não revela se o e-mail tem conta (só rede/limite de envios falham aqui).
+      avisar("Erro", "Não foi possível enviar agora. Tente novamente em instantes.");
+    } else {
+      // Mesma resposta exista conta ou não.
+      avisar(
+        "Verifique o seu e-mail",
+        "Se o e-mail estiver cadastrado, enviamos um código.",
+      );
       setView("recuperar");
     }
     setLoading(false);
   };
 
   const redefinirSenha = async () => {
+    // Antes de verificar o código: o código é de uso único e não deve ser gasto
+    // com uma senha que seria recusada.
+    if (password.length < SENHA_MIN) {
+      avisar("Atenção", `A senha deve ter no mínimo ${SENHA_MIN} caracteres.`);
+      return;
+    }
     setLoading(true);
     const { error: otpError } = await supabase.auth.verifyOtp({
       email,
@@ -231,14 +255,14 @@ export function Auth() {
       type: "recovery",
     });
     if (otpError) {
-      Alert.alert("Erro", "Código inválido.");
+      avisar("Erro", "Código inválido.");
       setLoading(false);
       return;
     }
     const { error: updateError } = await supabase.auth.updateUser({ password });
-    if (updateError) Alert.alert("Erro", traduzirErro(updateError.message));
+    if (updateError) avisar("Erro", traduzirErro(updateError.message));
     else {
-      Alert.alert("Sucesso", "Senha alterada!");
+      avisar("Sucesso", "Senha alterada!");
       mudarTela("login");
     }
     setLoading(false);
@@ -395,17 +419,16 @@ export function Auth() {
               editable={view !== "recuperar" && view !== "confirmar_otp"}
             />
 
-            {tipoUsuario === "sindico" &&
-              (view === "login" || view === "cadastro") && (
-                <PasswordInput
-                  style={styles.inputWarning}
-                  iconColor="#fde047"
-                  placeholder="Código Único do Síndico"
-                  placeholderTextColor="#9ca3af"
-                  value={codigoSindico}
-                  onChangeText={setCodigoSindico}
-                />
-              )}
+            {tipoUsuario === "sindico" && view === "cadastro" && (
+              <PasswordInput
+                style={styles.inputWarning}
+                iconColor="#fde047"
+                placeholder="Código Único do Síndico"
+                placeholderTextColor="#9ca3af"
+                value={codigoSindico}
+                onChangeText={setCodigoSindico}
+              />
+            )}
 
             {(view === "recuperar" || view === "confirmar_otp") && (
               <TextInput
@@ -428,13 +451,26 @@ export function Auth() {
                   view === "login"
                     ? "Senha"
                     : view === "cadastro"
-                      ? "Crie uma senha forte"
-                      : "Digite a nova senha"
+                      ? `Crie uma senha (mínimo ${SENHA_MIN} caracteres)`
+                      : `Nova senha (mínimo ${SENHA_MIN} caracteres)`
                 }
                 placeholderTextColor="#64748b"
                 value={password}
                 onChangeText={setPassword}
               />
+            )}
+
+            {/* Regra sempre visível (o placeholder some ao digitar); fica verde ao atingir o mínimo. */}
+            {(view === "cadastro" || view === "recuperar") && (
+              <Text
+                style={[
+                  styles.dicaSenha,
+                  password.length >= SENHA_MIN && { color: "#34d399" },
+                ]}
+              >
+                {password.length >= SENHA_MIN ? "✓ " : ""}Mínimo de {SENHA_MIN}{" "}
+                caracteres ({password.length}/{SENHA_MIN})
+              </Text>
             )}
 
             {view === "cadastro" && (
@@ -598,6 +634,13 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     borderWidth: 1,
     borderColor: "#334155",
+  },
+  // Fica logo abaixo do campo de senha: desfaz o marginBottom do input acima.
+  dicaSenha: {
+    color: "#94a3b8",
+    fontSize: 13,
+    marginTop: -8,
+    marginBottom: 16,
   },
   inputWarning: {
     backgroundColor: "#332701",

@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ScrollView,
   Modal,
-  Alert,
   StatusBar,
   UIManager,
   LayoutAnimation,
@@ -23,9 +22,9 @@ import { BlurView } from "expo-blur";
 import { Session } from "@supabase/supabase-js";
 import { supabase } from "../supabase"; // Ajuste o caminho se necessário
 import { Auth } from "../Auth"; // Ajuste o caminho se necessário
-import { PasswordInput } from "../components/password-input";
 import { DateTimeField } from "../components/date-time-field";
 import { ModalOverlay } from "../components/modal-overlay";
+import { avisar } from "../utils/avisar";
 import {
   MESES,
   DIAS_SEMANA,
@@ -86,10 +85,12 @@ export default function App() {
       setSession(sessaoDeAcesso);
 
       if (sessaoDeAcesso?.user) {
-        // Lê os dados que guardámos no Auth.tsx durante o cadastro
+        // Perfil e aprovação vêm de app_metadata (só o servidor altera).
+        // user_metadata é editável pelo próprio usuário e só serve para dados de exibição.
         const metadata = sessaoDeAcesso.user.user_metadata;
-        const role = metadata?.role || "morador";
-        const status = metadata?.status_aprovacao || "pendente";
+        const appMetadata = sessaoDeAcesso.user.app_metadata;
+        const role = appMetadata?.role === "sindico" ? "sindico" : "morador";
+        const aprovado = appMetadata?.status_aprovacao === "aprovado";
 
         setUser(role); // Define se é 'sindico' ou 'morador'
 
@@ -104,12 +105,8 @@ export default function App() {
               : "Morador",
         );
 
-        // Se for morador e ainda estiver pendente, bloqueia a tela
-        if (role === "morador" && status === "pendente") {
-          setIsPending(true);
-        } else {
-          setIsPending(false);
-        }
+        // Nega por padrão: morador só entra com status_aprovacao = aprovado
+        setIsPending(role === "morador" && !aprovado);
       } else {
         setUser(null);
         setIsPending(false);
@@ -153,17 +150,21 @@ export default function App() {
     mes: hoje.getMonth(),
   }));
 
-  const [username, setUsername] = useState<string>("");
-  const [password, setPassword] = useState<string>("");
-
   // --- ESTADO DA LISTA DE ESPERA (Agora começa vazia) ---
   const [moradoresPendentes, setMoradoresPendentes] = useState<any[]>([]);
 
   // --- BUSCAR DADOS REAIS DO SUPABASE ---
+  const [erroPendentes, setErroPendentes] = useState<string>("");
+
   const buscarPendentes = async () => {
     const { data, error } = await supabase.rpc("get_moradores_pendentes");
-    if (data) setMoradoresPendentes(data);
-    if (error) console.log("Erro ao buscar pendentes:", error);
+    // Sem console.log: o objeto de erro pode carregar dados pessoais dos moradores.
+    if (error) {
+      setErroPendentes("Não foi possível carregar a lista de moradores.");
+      return;
+    }
+    setErroPendentes("");
+    setMoradoresPendentes(data ?? []);
   };
 
   // Executa a busca automaticamente sempre que o síndico abre a aba de aprovações
@@ -180,11 +181,11 @@ export default function App() {
     });
 
     if (error) {
-      Alert.alert("Erro", "Não foi possível aprovar o morador.");
+      avisar("Erro", "Não foi possível aprovar o morador.");
     } else {
       // Remove da tela imediatamente se der sucesso no banco
       setMoradoresPendentes((prev) => prev.filter((m) => m.id !== id));
-      Alert.alert("Sucesso", "O acesso do morador foi libertado!");
+      avisar("Sucesso", "O acesso do morador foi libertado!");
     }
   };
 
@@ -192,30 +193,45 @@ export default function App() {
   const fazerLogout = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) {
-      Alert.alert("Erro ao sair", error.message);
+      avisar("Erro ao sair", error.message);
     }
     // Não precisa de fazer mais nada, o useEffect deteta a saída e mostra o Auth.tsx novo!
   };
 
-  const [comunicados, setComunicados] = useState<Comunicado[]>([
-    {
-      id: 1,
-      tipo: "Aviso",
-      titulo: "Manutenção da Piscina",
-      texto: "A piscina estará fechada amanhã para limpeza profunda.",
-      data: "15/10/2026",
-      vistoPor: [],
-    },
-    {
-      id: 2,
-      tipo: "Reunião",
-      titulo: "Assembleia Geral",
-      texto:
-        "Aprovação de contas do semestre. Contamos com a presença de todos.",
-      data: "20/10/2026",
-      vistoPor: [],
-    },
-  ]);
+  // Comunicados vêm da tabela `comunicados` (RLS: só síndico e morador aprovado leem).
+  const [comunicados, setComunicados] = useState<Comunicado[]>([]);
+  const [erroComunicados, setErroComunicados] = useState<string>("");
+
+  // Devolve a lista ou null em caso de erro; quem chama decide o que mostrar.
+  const carregarComunicados = async (): Promise<Comunicado[] | null> => {
+    const { data, error } = await supabase
+      .from("comunicados")
+      .select("id, tipo, titulo, texto, created_at, comunicados_vistos(user_id)")
+      .order("created_at", { ascending: false });
+    if (error) return null;
+    return (data ?? []).map((c: any) => ({
+      id: c.id,
+      tipo: c.tipo,
+      titulo: c.titulo,
+      texto: c.texto,
+      data: new Date(c.created_at).toLocaleDateString("pt-BR"),
+      vistoPor: (c.comunicados_vistos ?? []).map(
+        (v: { user_id: string }) => v.user_id,
+      ),
+    }));
+  };
+
+  const aplicarComunicados = (lista: Comunicado[] | null) => {
+    setErroComunicados(lista ? "" : "Não foi possível carregar os comunicados.");
+    if (lista) setComunicados(lista);
+  };
+
+  // Carrega quando há sessão liberada (morador pendente não passa do RLS).
+  const uidLogado = session?.user.id;
+  useEffect(() => {
+    if (!uidLogado || isPending) return;
+    carregarComunicados().then(aplicarComunicados);
+  }, [uidLogado, isPending]);
 
   const [eventos, setEventos] = useState<Evento[]>([
     {
@@ -336,12 +352,12 @@ export default function App() {
       !novaReserva.horaInicio ||
       !novaReserva.horaFim
     ) {
-      return Alert.alert("Atenção", "Selecione o espaço e os horários.");
+      return avisar("Atenção", "Selecione o espaço e os horários.");
     }
 
     const chaveReserva = chaveData(dataReserva);
     if (chaveReserva < hojeChave) {
-      return Alert.alert(
+      return avisar(
         "Atenção",
         "Não é possível reservar em uma data que já passou.",
       );
@@ -356,7 +372,7 @@ export default function App() {
     const endMins = timeToMins(novaReserva.horaFim);
 
     if (startMins >= endMins) {
-      return Alert.alert(
+      return avisar(
         "Atenção",
         "A hora final deve ser maior que a hora inicial.",
       );
@@ -365,7 +381,7 @@ export default function App() {
     if (chaveReserva === hojeChave) {
       const agora = new Date();
       if (startMins <= agora.getHours() * 60 + agora.getMinutes()) {
-        return Alert.alert(
+        return avisar(
           "Atenção",
           "A hora inicial de uma reserva para hoje deve ser futura.",
         );
@@ -390,7 +406,7 @@ export default function App() {
     });
 
     if (temConflito) {
-      return Alert.alert(
+      return avisar(
         "Indisponível",
         "Este espaço já está reservado para este horário neste dia.",
       );
@@ -413,7 +429,7 @@ export default function App() {
     setShowNovaReserva(false);
     setNovaReserva({ titulo: "", detalhes: "", horaInicio: "", horaFim: "" });
     setDataReserva(new Date());
-    Alert.alert("Sucesso", "A sua reserva foi efetuada!");
+    avisar("Sucesso", "A sua reserva foi efetuada!");
   };
 
   const [novoCom, setNovoCom] = useState({
@@ -433,62 +449,61 @@ export default function App() {
     setActiveTab(tab);
   };
 
-  const handleLogin = () => {
-    const sqlPattern = /('|;|--|union|select|insert|drop)/i;
-    if (sqlPattern.test(username) || sqlPattern.test(password)) {
-      Alert.alert(
-        "Segurança",
-        "Caracteres inválidos detectados. Acesso bloqueado.",
-      );
-      return;
-    }
-    animate();
-    if (username.toLowerCase() === "sindico" && password === "123")
-      setUser("sindico");
-    else if (username.toLowerCase() === "morador" && password === "123")
-      setUser("morador");
-    else
-      Alert.alert(
-        "Erro",
-        "Credenciais inválidas. Use sindico/123 ou morador/123",
-      );
-  };
-
   const handleTitleClick = () => {
     const newCount = clickCount + 1;
     setClickCount(newCount);
     if (newCount === 7) {
       animate();
       setShowAdmin(true);
-      Alert.alert("Modo Desenvolvedor", "Painel de administração ativado.");
+      avisar("Modo Desenvolvedor", "Painel de administração ativado.");
     }
   };
 
-  const marcarComoVisto = (id: number) => {
-    if (!user) return;
+  const marcarComoVisto = async (id: number) => {
+    const uid = session?.user.id;
+    if (!uid) return;
+    const { error } = await supabase
+      .from("comunicados_vistos")
+      .insert({ comunicado_id: id });
+    // 23505 = já estava marcado como visto: o estado local só acompanha.
+    if (error && error.code !== "23505") {
+      avisar("Erro", "Não foi possível marcar como visto.");
+      return;
+    }
     animate();
     setComunicados((prev) =>
       prev.map((c) =>
-        c.id === id ? { ...c, vistoPor: [...c.vistoPor, user] } : c,
+        c.id === id ? { ...c, vistoPor: [...c.vistoPor, uid] } : c,
       ),
     );
   };
 
-  const criarComunicado = () => {
-    if (!novoCom.titulo || !novoCom.texto)
-      return Alert.alert("Atenção", "Preencha todos os campos.");
+  const [publicandoCom, setPublicandoCom] = useState<boolean>(false);
+  // Erro mostrado dentro do modal (mantém o erro visível junto do formulário).
+  const [erroNovoCom, setErroNovoCom] = useState<string>("");
+
+  const criarComunicado = async () => {
+    if (publicandoCom) return;
+    if (!novoCom.titulo.trim() || !novoCom.texto.trim()) {
+      setErroNovoCom("Preencha o título e a mensagem.");
+      return;
+    }
+    setPublicandoCom(true);
+    setErroNovoCom("");
+    const { error } = await supabase.from("comunicados").insert({
+      tipo: novoCom.tipo,
+      titulo: novoCom.titulo.trim(),
+      texto: novoCom.texto.trim(),
+    });
+    setPublicandoCom(false);
+    if (error) {
+      setErroNovoCom(`Não foi possível publicar (${error.code ?? "erro"}).`);
+      return;
+    }
     animate();
-    setComunicados([
-      {
-        id: Date.now(),
-        ...novoCom,
-        data: new Date().toLocaleDateString("pt-BR"),
-        vistoPor: [],
-      },
-      ...comunicados,
-    ]);
     setShowNovoComunicado(false);
     setNovoCom({ tipo: "AVISO", titulo: "", texto: "" });
+    aplicarComunicados(await carregarComunicados());
   };
 
   const enviarSugestao = () => {
@@ -510,7 +525,7 @@ export default function App() {
   const avaliarSugestao = (id: number | null, acao: string) => {
     if (id === null) return;
     if (acao === "arquivada" && !motivoArquivamento)
-      return Alert.alert("Atenção", "É obrigatório justificar o arquivamento.");
+      return avisar("Atenção", "É obrigatório justificar o arquivamento.");
     animate();
     setSugestoes((prev) =>
       prev.map((s) =>
@@ -625,129 +640,8 @@ export default function App() {
     Math.max(44, Math.round((larguraGrade / 7) * 0.95)),
   );
 
-  // --- TELA DE LOGIN ---
-  if (!user) {
-    return (
-      <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.bg }]}>
-        <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
-        <View style={styles.loginContainer}>
-          <View style={styles.iconWrapper}>
-            <MaterialCommunityIcons
-              name="office-building"
-              size={60}
-              color={theme.primary[0]}
-            />
-          </View>
-          <Text style={[styles.appName, { color: theme.text }]}>CondoOwl</Text>
-          <Text style={[styles.loginSubtitle, { color: theme.textMuted }]}>
-            Acesse sua conta para continuar
-          </Text>
-
-          <View
-            style={[
-              styles.card,
-              {
-                backgroundColor: theme.card,
-                borderColor: theme.border,
-                shadowColor: theme.primary[0],
-              },
-            ]}
-          >
-            <TextInput
-              style={[
-                styles.input,
-                {
-                  color: theme.text,
-                  borderColor: theme.border,
-                  backgroundColor: theme.bg,
-                },
-              ]}
-              placeholder="Usuário"
-              placeholderTextColor={theme.textMuted}
-              value={username}
-              onChangeText={setUsername}
-              autoCapitalize="none"
-            />
-            <PasswordInput
-              style={[
-                styles.input,
-                {
-                  color: theme.text,
-                  borderColor: theme.border,
-                  backgroundColor: theme.bg,
-                },
-              ]}
-              iconColor={theme.textMuted}
-              placeholder="Senha"
-              placeholderTextColor={theme.textMuted}
-              value={password}
-              onChangeText={setPassword}
-            />
-
-            <TouchableOpacity onPress={handleLogin} activeOpacity={0.8}>
-              <LinearGradient
-                colors={theme.primary as [string, string]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.btnGradient}
-              >
-                <Text style={styles.btnText}>Entrar</Text>
-                <Feather
-                  name="arrow-right"
-                  size={20}
-                  color="#FFF"
-                  style={{ marginLeft: 8 }}
-                />
-              </LinearGradient>
-            </TouchableOpacity>
-
-            <View style={styles.loginShortcuts}>
-              <Text
-                style={{
-                  color: theme.textMuted,
-                  fontSize: 13,
-                  marginBottom: 12,
-                  textAlign: "center",
-                }}
-              >
-                Acesso rápido para testes
-              </Text>
-              <View style={styles.row}>
-                <TouchableOpacity
-                  style={[
-                    styles.btnOutline,
-                    { borderColor: theme.primary[0], flex: 1, marginRight: 6 },
-                  ]}
-                  onPress={() => {
-                    setUsername("sindico");
-                    setPassword("123");
-                  }}
-                >
-                  <Text style={{ color: theme.primary[0], fontWeight: "700" }}>
-                    Síndico
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.btnOutline,
-                    { borderColor: theme.primary[0], flex: 1, marginLeft: 6 },
-                  ]}
-                  onPress={() => {
-                    setUsername("morador");
-                    setPassword("123");
-                  }}
-                >
-                  <Text style={{ color: theme.primary[0], fontWeight: "700" }}>
-                    Morador
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // Sem perfil resolvido não há o que mostrar (nega por padrão).
+  if (!user) return null;
 
   // --- TELA PRINCIPAL ---
   return (
@@ -850,7 +744,10 @@ export default function App() {
                 {/* 👆 Fim do bloco novo 👆 */}
                 {user === "sindico" && (
                   <TouchableOpacity
-                    onPress={() => setShowNovoComunicado(true)}
+                    onPress={() => {
+                      setErroNovoCom("");
+                      setShowNovoComunicado(true);
+                    }}
                     activeOpacity={0.8}
                   >
                     <LinearGradient
@@ -865,8 +762,19 @@ export default function App() {
                 )}
               </View>
 
+              {erroComunicados !== "" && (
+                <Text style={{ color: "#ef4444", marginBottom: 12 }}>
+                  {erroComunicados}
+                </Text>
+              )}
+              {erroComunicados === "" && comunicados.length === 0 && (
+                <Text style={{ color: theme.textMuted, marginBottom: 12 }}>
+                  Nenhum comunicado publicado ainda.
+                </Text>
+              )}
+
               {comunicados.map((c) => {
-                const visto = c.vistoPor.includes(user);
+                const visto = c.vistoPor.includes(session?.user.id ?? "");
                 return (
                   <View
                     key={c.id}
@@ -889,7 +797,7 @@ export default function App() {
                       >
                         <Ionicons
                           name={
-                            c.tipo === "Reunião"
+                            c.tipo.toUpperCase() === "REUNIÃO"
                               ? "people-outline"
                               : "alert-circle-outline"
                           }
@@ -1385,6 +1293,12 @@ export default function App() {
               Aprovar Moradores
             </Text>
 
+            {erroPendentes !== "" && (
+              <Text style={{ color: theme.danger, marginBottom: 12 }}>
+                {erroPendentes}
+              </Text>
+            )}
+
             {moradoresPendentes.length === 0 ? (
               <Text
                 style={{
@@ -1833,20 +1747,25 @@ export default function App() {
                 onChangeText={(t) => setNovoCom({ ...novoCom, texto: t })}
               />
 
+              {erroNovoCom !== "" && (
+                <Text style={{ color: "#ef4444", marginBottom: 10 }}>
+                  {erroNovoCom}
+                </Text>
+              )}
+
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6 }}
-                  onPress={() => {
-                    /* Sua função de criar comunicado */ setShowNovoComunicado(
-                      false,
-                    );
-                  }}
+                  style={{ flex: 1, marginRight: 6, opacity: publicandoCom ? 0.6 : 1 }}
+                  disabled={publicandoCom}
+                  onPress={criarComunicado}
                 >
                   <LinearGradient
                     colors={theme.primary as [string, string]}
                     style={styles.btnGradient}
                   >
-                    <Text style={styles.btnText}>Publicar</Text>
+                    <Text style={styles.btnText}>
+                      {publicandoCom ? "Publicando..." : "Publicar"}
+                    </Text>
                   </LinearGradient>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -2251,24 +2170,6 @@ export default function App() {
 // === ESTILOS MODERNOS ===
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
-
-  // Login
-  loginContainer: { flex: 1, justifyContent: "center", padding: 24 },
-  iconWrapper: { alignItems: "center", marginBottom: 16 },
-  appName: {
-    fontSize: 32,
-    fontWeight: "900",
-    textAlign: "center",
-    marginBottom: 8,
-    letterSpacing: -0.5,
-  },
-  loginSubtitle: { fontSize: 16, textAlign: "center", marginBottom: 40 },
-  loginShortcuts: {
-    marginTop: 24,
-    paddingTop: 24,
-    borderTopWidth: 1,
-    borderTopColor: "#E5E7EB",
-  },
 
   // Header Global
   header: {
