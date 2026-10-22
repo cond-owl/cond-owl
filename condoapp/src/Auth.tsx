@@ -11,9 +11,12 @@ import {
   KeyboardAvoidingView,
   Platform,
   Switch,
+  useWindowDimensions,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "./supabase";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { PasswordInput } from "./components/password-input";
 
 const CODIGO_SECRETO_SINDICO = "OWL2026";
 
@@ -37,6 +40,13 @@ export function Auth() {
   const [celular, setCelular] = useState("");
   const [unidade, setUnidade] = useState("Apto: "); // Atualizado com os dois pontos
   const [manterConectado, setManterConectado] = useState(true);
+
+  // --- RESPONSIVIDADE (celulares pequenos, tablets e PWA em tela cheia) ---
+  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const compacto = width < 360;
+  const tablet = width >= 768;
+  const espacamento = compacto ? 16 : 24;
 
   // --- MÁSCARAS E VALIDAÇÕES AUTOMÁTICAS ---
   const formatarNome = (texto: string) => {
@@ -241,24 +251,40 @@ export function Auth() {
       style={{ flex: 1, backgroundColor: "#0f172a" }}
     >
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[
+          styles.container,
+          {
+            paddingTop: espacamento + insets.top,
+            paddingBottom: espacamento + insets.bottom,
+            paddingLeft: espacamento + insets.left,
+            paddingRight: espacamento + insets.right,
+          },
+        ]}
         keyboardShouldPersistTaps="handled"
       >
-        {/* 👇 O SEGREDO DO PWA: Este View limita a largura no PC e centraliza 👇 */}
-        <View style={{ width: "100%", maxWidth: 480, alignSelf: "center" }}>
-          <View style={styles.logoContainer}>
+        {/* 👇 O SEGREDO DO PWA: Este View limita a largura no PC/tablet e centraliza 👇 */}
+        <View
+          style={{
+            width: "100%",
+            maxWidth: tablet ? 560 : 480,
+            alignSelf: "center",
+          }}
+        >
+          <View
+            style={[styles.logoContainer, compacto && { marginBottom: 24 }]}
+          >
             <MaterialCommunityIcons
               name="owl"
-              size={54}
+              size={compacto ? 40 : 54}
               color="#818cf8"
               style={{ marginRight: 8 }}
             />
-            <Text style={styles.logo}>
+            <Text style={[styles.logo, compacto && { fontSize: 34 }]}>
               Condo<Text style={{ color: "#818cf8" }}>Owl</Text>
             </Text>
           </View>
 
-          <View style={styles.card}>
+          <View style={[styles.card, compacto && { padding: 16 }]}>
             {(view === "login" || view === "cadastro") && (
               <View style={styles.tabContainer}>
                 <TouchableOpacity
@@ -371,11 +397,11 @@ export function Auth() {
 
             {tipoUsuario === "sindico" &&
               (view === "login" || view === "cadastro") && (
-                <TextInput
+                <PasswordInput
                   style={styles.inputWarning}
+                  iconColor="#fde047"
                   placeholder="Código Único do Síndico"
                   placeholderTextColor="#9ca3af"
-                  secureTextEntry
                   value={codigoSindico}
                   onChangeText={setCodigoSindico}
                 />
@@ -396,7 +422,7 @@ export function Auth() {
             {(view === "login" ||
               view === "cadastro" ||
               view === "recuperar") && (
-              <TextInput
+              <PasswordInput
                 style={styles.input}
                 placeholder={
                   view === "login"
@@ -406,18 +432,16 @@ export function Auth() {
                       : "Digite a nova senha"
                 }
                 placeholderTextColor="#64748b"
-                secureTextEntry
                 value={password}
                 onChangeText={setPassword}
               />
             )}
 
             {view === "cadastro" && (
-              <TextInput
+              <PasswordInput
                 style={styles.input}
                 placeholder="Confirme a sua senha"
                 placeholderTextColor="#64748b"
-                secureTextEntry
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
               />
@@ -522,7 +546,6 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     backgroundColor: "#0f172a",
     justifyContent: "center",
-    padding: 24,
   },
   logoContainer: {
     flexDirection: "row",
@@ -570,6 +593,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#0f172a",
     color: "#f8fafc",
     padding: 16,
+    fontSize: 16, // 16px evita o zoom automático do iOS ao focar o campo
     borderRadius: 12,
     marginBottom: 16,
     borderWidth: 1,
@@ -579,6 +603,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#332701",
     color: "#fde047",
     padding: 16,
+    fontSize: 16,
     borderRadius: 12,
     marginBottom: 16,
     borderWidth: 1,
