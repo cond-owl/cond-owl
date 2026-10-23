@@ -23,6 +23,9 @@ ambiente local com `supabase start`). Elas são ordenadas e cada uma tem um assu
 | `0009_condominios` | `condominios` (nome e código único, normalizado); só o síndico escreve, só aprovados leem |
 | `0010_condominio_colinas_de_roma` | dado inicial: condomínio "Colinas de Roma" |
 | `0011_perfis_condominio` | `perfis.condominio_id` (FK para `condominios`); o usuário não consegue alterar |
+| `0012_validar_codigo_condominio` | `validar_codigo_condominio(codigo_informado)`: sim/não para a tela de código, com `anon`; o cadastro passa a exigir código de condomínio existente e grava `perfis.condominio_id` |
+| `0013_usuario_pertence_ao_condominio` | `usuario_pertence_ao_condominio(codigo_informado)`: sim/não se o usuário logado pertence ao condomínio do código; associa contas antigas sem condomínio quando só existe um |
+| `0014_tipo_usuario` | tabela `tipo_usuario` (síndico, morador), `perfis.tipo_usuario_id` espelhando `app_metadata` por gatilho e `usuario_e_do_tipo(tipo_informado)` para o login |
 
 Aplicar em ordem. Para dados de teste, `seeds/dev_usuarios_colinas_de_roma.sql` (não é migração; nunca em produção) cria 1 síndico e 2 moradores no condomínio, com senhas geradas na hora e mostradas só uma vez. Nada foi executado em Supabase real: foram validadas num Postgres
 descartável (Docker) com um `auth` simulado. Depois de aplicar, definir o código de
@@ -196,10 +199,9 @@ a lista de moradores." Os dados pessoais não vão para o console.
 
 ## Banco: tabelas e por que são assim
 
-A migração cria o esquema que o app vai precisar. **Só os comunicados estão ligados ao app** (listar, publicar e marcar como visto). **Ainda em memória, sem usar o banco:**
-calendário, reservas, atas e sugestões, até a
-próxima etapa. Todas as tabelas têm RLS ligado; sem policy, a chave anônima não
-acessa nada.
+As migrações criam o esquema que o app usa. **Ligados ao app:** comunicados (listar, publicar
+e marcar como visto), calendário e reservas, sugestões (enviar e avaliar) e atas (listar e
+cadastrar). Todas as tabelas têm RLS ligado; sem policy, a chave anônima não acessa nada.
 
 | Tabela | Quem lê | Quem escreve |
 |--------|---------|--------------|
@@ -212,9 +214,24 @@ acessa nada.
 | `app_secrets` | ninguém pela API | hash do código de síndico, só por SQL |
 
 Decisões:
-- **Perfil e aprovação só em `app_metadata`**, não em `perfis`. Assim há uma fonte
-  única, e as policies leem do token sem consultar tabela. `perfis` guarda só dados
-  pessoais.
+- **Perfil e aprovação decididos em `app_metadata`.** É a fonte: as policies leem do token
+  sem consultar tabela. `perfis` guarda os dados pessoais e, desde a 0014, o tipo de
+  usuário como espelho (ver abaixo). A aprovação segue só em `app_metadata`.
+- **Tipo de usuário é tabela e coluna (0014).** `tipo_usuario` (síndico e morador) e
+  `perfis.tipo_usuario_id` (obrigatória, FK, o usuário não altera). A coluna **espelha**
+  `app_metadata`, que continua sendo o que o token e o RLS leem: o gatilho do cadastro
+  grava o tipo que o servidor definiu, e um gatilho em `auth.users` acompanha qualquer
+  promoção ou rebaixamento feito depois (ex.: o seed). Assim as duas fontes nunca divergem
+  e não há outro lugar para escrever o papel. Papel desconhecido vira morador.
+- **O login confere o tipo escolhido na tela (0014).** As abas Morador e Síndico do login
+  passam a valer: depois do login o app pergunta ao servidor (`usuario_e_do_tipo`, sim ou
+  não, só `authenticated`, sobre `auth.uid()`) se o usuário é do tipo da aba. Morador na aba
+  Síndico, ou o contrário, é recusado e a sessão deste aparelho é encerrada, com o motivo no
+  card de login. Vale como o do condomínio: é uma conferência do app. O que dá poder de
+  síndico de verdade continua sendo `app_metadata`, que o usuário não edita. Sessão
+  restaurada na abertura do app não tem aba escolhida e não passa por essa conferência.
+  Efeito: síndico que entrar na aba Morador (a padrão) é recusado e precisa escolher a aba
+  Síndico.
 - **Unidade não é editável pelo morador:** o síndico aprova com base nela; mudar
   depois anularia a verificação.
 - **Conflito de reserva é do banco** (constraint de exclusão: mesmo espaço, horários
@@ -225,6 +242,71 @@ Decisões:
 - **Cadastro com código de síndico errado é recusado** pelo banco; o Auth devolve
   "Database error saving new user", que o app traduz.
 - Token é emitido com `app_metadata` fixo: aprovação só aparece depois de novo login.
+- **Código de condomínio validado no servidor (0012).** A tela de código antes do login
+  usava um código fixo no app: ficava no bundle público e só valia no cliente. Agora o
+  app pergunta ao banco (`validar_codigo_condominio`), que responde só sim ou não: a
+  tabela `condominios` continua ilegível sem login (o código não vaza e a lista não
+  pode ser varrida), e o `anon` só ganha `EXECUTE` nessa função. Quais códigos valem é
+  dado, não código: hoje só `colinasderomaii.owl`; outro condomínio entra por `insert`
+  em `condominios`, sem mexer no app.
+- **O cadastro também exige o código (0012).** A tela é só a porta de entrada: quem
+  chamasse `signUp` direto pela API a pularia. O gatilho `definir_perfil_novo_usuario`
+  recusa conta sem `codigo_condominio` existente (`condominio_invalido`) e o perfil
+  nasce com `condominio_id` preenchido. O app envia o código que o servidor já validou
+  na tela. Consequência: versões antigas do app, sem esse campo, não conseguem mais
+  cadastrar; o seed de desenvolvimento já envia o campo.
+- **O código guardado no aparelho é conferido de novo a cada abertura.** Se o código for
+  removido de `condominios`, o app volta para a tela de código em vez de confiar no que
+  ficou no `localStorage`. Falha de rede mostra "não foi possível verificar", e não
+  "não encontrado", para não confundir erro de conexão com código errado.
+- **Limite conhecido:** não há limite de tentativas na função. Quem quiser adivinhar
+  códigos pode chamá-la em sequência. O código atual é longo, o que torna isso
+  impraticável hoje, mas se os códigos ficarem curtos convém ligar CAPTCHA e limite de
+  tentativas no painel do Supabase.
+- **O login confere o condomínio do usuário (0013).** O código da primeira tela escolhe o
+  condomínio; depois do login o app pergunta ao servidor se o `condominio_id` do usuário
+  logado é o desse código (`usuario_pertence_ao_condominio`) e só então libera o app. A
+  função avalia sempre `auth.uid()`, nunca um id vindo do cliente, devolve só sim ou não
+  (não revela o condomínio de ninguém) e só `authenticated` executa. Se não pertence, o app
+  encerra a sessão deste aparelho (`signOut` com `scope: local`, para não derrubar o
+  usuário nos outros) e avisa. Sem código guardado (sessão de antes desta conferência),
+  volta ao login sem aviso, e a pessoa informa o código de novo.
+- **Limite importante: a conferência é do app, não do banco.** Ela barra o uso normal, mas
+  as policies e RPCs (0001 a 0011) ainda não filtram por `condominio_id`: quem usar o
+  token direto pela API, sem passar pelo app, não é barrado por ela. Com um único
+  condomínio isso não tem efeito prático. Antes de entrar o segundo condomínio, separar de
+  verdade: gravar `condominio_id` em `app_metadata` no gatilho do cadastro (0012) e
+  filtrar por ele nas policies e RPCs (o mapa das tabelas lista isso como pendência).
+- **Contas anteriores à 0012 e o backfill da 0013.** Elas não têm `condominio_id` e seriam
+  barradas no login, síndico inclusive. A 0013 associa todas ao condomínio, mas só
+  enquanto existir exatamente um: com mais de um não adivinha e não altera nada. Nesse
+  caso, antes de usar o app, associar à mão (SQL Editor, como dono do banco):
+  `update public.perfis set condominio_id = (select id from public.condominios where codigo = '<codigo>') where condominio_id is null;`
+  Sem isso, quem ficou sem condomínio não consegue entrar.
+- **Código validado também fica em memória.** Se o armazenamento do aparelho falhar
+  (navegador em modo restrito), o código vale até fechar o app em vez de o login negar em
+  silêncio. A pessoa é avisada de que terá de informá-lo de novo.
+- **Reservas, sugestões e atas passaram a ser gravadas no banco.** Antes eram listas em
+  memória que sumiam ao recarregar. O app grava e lê pelas tabelas `eventos`, `sugestoes` e
+  `atas` direto pelo cliente do Supabase (`src/utils/dadosCondominio.ts`), sem endpoint
+  próprio: quem protege os dados é o RLS das migrações 0006 a 0008, que não mudaram. Criar
+  uma API a mais só repetiria essas regras em outro lugar.
+- **Quem decide a reserva é o banco.** A checagem de conflito no app é só um aviso rápido;
+  duas pessoas reservando ao mesmo tempo são separadas pela constraint de exclusão
+  (`23P01`, traduzido para "espaço já reservado"). Data passada e reserva em nome de outro
+  usuário são barradas pelo RLS (`42501`). Depois de gravar, o app recarrega a lista, mesmo
+  em caso de erro, para mostrar a reserva que causou o conflito.
+- **Avaliar sugestão confere a linha alterada.** O RLS não devolve erro quando o morador tenta
+  avaliar: o `update` só afeta 0 linhas. O app pede a linha de volta (`select`) e, se não
+  veio nada, mostra "apenas o síndico pode avaliar", em vez de fingir que deu certo.
+- **Ata guarda nome ou link do PDF, não o arquivo.** A coluna `arquivo` é texto. O app só abre
+  o arquivo se for `http(s)`; senão mostra o nome. Enviar o PDF de verdade exigiria o Storage
+  do Supabase (bucket, policies e limite de tamanho), que ainda não existe.
+- **Listas recarregam ao entrar na aba** (calendário, atas e sugestões), para ver o que os
+  outros fizeram. Não há atualização em tempo real.
+- **Parâmetro `codigo_informado`, não `codigo`:** em função SQL, a coluna `codigo` vence
+  um parâmetro de mesmo nome e a comparação vira coluna = coluna, aceitando qualquer
+  código. Foi um erro real da primeira versão, pego pelos testes.
 
 
 Como validar de novo: subir um Postgres descartável, criar um `auth` simulado

@@ -1,56 +1,136 @@
-# Welcome to your Expo app 👋
+# CondoOwl
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Aplicativo de gestão de condomínio. Reúne num só lugar o que síndico e moradores
+costumam resolver por grupo de mensagens: **comunicados, agenda e reservas de espaços,
+atas de reunião e caixa de sugestões**. Funciona no celular (Android e iOS) e no navegador
+como PWA, com o mesmo código.
 
-## Get started
+O condomínio piloto é o **Colinas de Roma II**.
 
-1. Install dependencies
+## O que o app faz
+
+O app tem dois perfis. Cada pessoa entra com o seu e só vê o que o perfil permite.
+
+| Área | Morador | Síndico |
+|------|---------|---------|
+| **Mural** (comunicados) | lê e marca como visto | lê e publica, por categoria (aviso, reunião, manutenção, social) |
+| **Agenda** | vê eventos de hoje em diante e reserva espaços | vê também o histórico |
+| **Atas** | lê, por mês | lê e cadastra (data, pauta e nome ou link do PDF) |
+| **Sugestões** | envia sugestões | aprova ou arquiva, com motivo obrigatório ao arquivar |
+| **Aprovar** | — | libera o acesso de moradores recém-cadastrados |
+
+Quem acabou de se cadastrar fica em **Cadastro em Análise** até o síndico aprovar.
+
+### Como a pessoa entra
+
+1. **Código do condomínio.** Na primeira tela, informa o código do condomínio. O servidor
+   confere se ele existe; se não, aparece "Código de condomínio não encontrado."
+2. **Login ou cadastro.** Escolhe a aba **Morador** ou **Síndico**. O cadastro de síndico
+   pede ainda um código único de síndico, validado no servidor.
+3. **Conferência no servidor.** Depois do login, o app confere se o usuário pertence ao
+   condomínio do código digitado e se é do tipo da aba escolhida. Se não for, a sessão é
+   encerrada e o motivo aparece no card de login.
+4. **Aprovação.** Morador novo só usa o app depois que o síndico aprova.
+
+## Tecnologias
+
+- **App:** [Expo](https://expo.dev) 57, React Native 0.86, React 19, TypeScript e Expo Router
+  (rotas por arquivo em `src/app/`). React Compiler ligado.
+- **Banco e autenticação:** [Supabase](https://supabase.com) (Postgres, Auth e RLS). O app
+  fala direto com as tabelas pelo `@supabase/supabase-js`; não há servidor próprio.
+- **Build e publicação:** EAS (`eas.json`); versão web como PWA (`public/index.html`).
+
+## Como rodar
+
+Pré-requisitos: Node.js (versão LTS recente) e um projeto Supabase.
+
+1. **Instalar as dependências**
 
    ```bash
    npm install
    ```
 
-2. Start the app
+2. **Configurar o ambiente.** Copie `.env.example` para `.env` e preencha a URL e a chave
+   **anon/public** do seu projeto Supabase. Nunca use a `service_role` no app.
 
    ```bash
-   npx expo start
+   cp .env.example .env
    ```
 
-In the output, you'll find options to open the app in a
+3. **Montar o banco.** No SQL Editor do Supabase, rode em ordem os arquivos de
+   [`supabase/migrations/`](supabase/migrations) (`0001` a `0014`). Depois defina o código
+   de síndico (instruções no comentário da `0001`). Para ter contas de teste prontas, rode
+   uma vez `supabase/seeds/dev_usuarios_colinas_de_roma.sql` (**nunca em produção**).
+   Detalhes e decisões em [`supabase/README.md`](supabase/README.md).
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+4. **Iniciar o app**
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+   ```bash
+   npm run web        # navegador (PWA)
+   npm run android    # emulador ou aparelho Android
+   npm run ios        # simulador iOS
+   npx expo start     # menu com todas as opções
+   ```
 
-## Get a fresh project
+   Reinicie o servidor sempre que mudar o `.env`.
 
-When you're ready, run:
+## Qualidade
+
+Não há testes automatizados ainda. As conferências do projeto são:
 
 ```bash
-npm run reset-project
+npx tsc --noEmit   # tipos
+npm run lint       # ESLint (na primeira vez o Expo cria o eslint.config.js)
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+As regras do banco foram validadas num Postgres descartável (Docker) com um `auth`
+simulado; o roteiro está descrito no fim do [`supabase/README.md`](supabase/README.md).
 
-### Other setup steps
+## Estrutura
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```
+src/
+├── app/                 rotas (Expo Router); index.tsx é o app logado, com todas as abas
+├── Auth.tsx             código do condomínio, login, cadastro e recuperação de senha
+├── supabase.ts          cliente do Supabase (lê o .env)
+├── components/          seletor de data e hora (nativo e web), modal, campo de senha
+├── utils/
+│   ├── codigoCondominio.ts   código do condomínio e conferências pós-login
+│   ├── dadosCondominio.ts    reservas, sugestões e atas no banco
+│   ├── calendario.ts         datas e meses
+│   └── avisar.ts             alerta que funciona no celular e no navegador
+└── constants/ hooks/    tema e utilitários do template do Expo
+supabase/
+├── migrations/          esquema do banco, em ordem (0001 a 0014)
+├── seeds/               contas de teste (só desenvolvimento)
+├── docs/                mapa das tabelas
+└── README.md            segurança do banco e motivo de cada decisão
+```
 
-## Learn more
+## Segurança, em resumo
 
-To learn more about developing your project with Expo, look at the following resources:
+- **Quem protege os dados é o banco** (RLS), não a chave anônima do app, que é pública.
+- **Perfil e aprovação ficam em `app_metadata`**, que só o servidor altera. O usuário não
+  consegue se promover a síndico nem se autoaprovar.
+- **O código de síndico não está no app:** o banco guarda só o hash e valida no cadastro.
+- **O código do condomínio é validado no servidor,** no cadastro e na entrada.
+- **Limite conhecido:** a conferência de condomínio e de tipo no login é feita pelo app. As
+  tabelas ainda não filtram por condomínio; com um condomínio só isso não muda nada, mas é
+  preciso resolver antes de entrar o segundo. Está descrito em `supabase/README.md`.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Ainda não existe
 
-## Join the community
+- Upload do PDF da ata (hoje guarda o nome ou o link).
+- Tela para o síndico criar eventos de manutenção e reunião (o calendário já os exibe).
+- Dados separados por condomínio nas policies do banco.
+- Atualização em tempo real: as listas recarregam ao entrar em cada aba.
+- Testes automatizados.
 
-Join our community of developers creating universal apps.
+## Para quem mexe no código
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- Documentação do porquê das decisões: `supabase/README.md` (banco e segurança) e
+  `src/utils/README.md` (calendário e reservas).
+- Mudança no banco vira uma **migração nova** em `supabase/migrations/`; não se edita uma
+  migração que já foi aplicada.
+- Branches seguem `tipo/NNNN-descricao` (por exemplo `fix/0003-corrigir-typescript-app-tabs`).
+- `AGENTS.md` traz orientações do Expo para assistentes de código.
