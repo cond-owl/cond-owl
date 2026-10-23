@@ -21,7 +21,7 @@
       "package": "com.roberiopmfsteam.condoapp"
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./assets/images/favicon.png",
       "name": "CondoOwl",
       "shortName": "CondoOwl",
       "themeColor": "#0f172a",
