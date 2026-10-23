@@ -2,8 +2,8 @@
 
 - **Projeto:** CondoOwl (Supabase)
 - **Branch:** fix/0001-vulnerabilidade-perfil-aprovacao
-- **Migrações:** 0001 a 0011
-- **Situação:** esquema validado em Postgres de teste; o app usa o cadastro, a aprovação e os comunicados
+- **Migrações:** 0001 a 0014
+- **Situação:** esquema validado em Postgres de teste; o app usa o cadastro, a aprovação, os comunicados, as reservas, as sugestões e as atas
 
 ## 1. Visão geral
 
@@ -16,6 +16,9 @@ mindmap
       perfis
         nome, nascimento, celular, unidade
         condominio_id
+        tipo_usuario_id
+      tipo_usuario
+        síndico e morador
       app_secrets
         hash do código de síndico
     Condomínio
@@ -105,7 +108,7 @@ sequenceDiagram
     participant S as Síndico
     A->>U: cadastro com dados pessoais (e código, se for síndico)
     Note over U: gatilho 1 valida o código e define role e status em app_metadata
-    U->>P: gatilho 2 cria o perfil
+    U->>P: gatilho 2 cria o perfil, já com condomínio e tipo de usuário
     A->>U: confirma o e-mail e entra
     Note over A: morador pendente vê a tela Cadastro em Análise
     S->>U: aprovar_acesso_morador
@@ -118,6 +121,7 @@ sequenceDiagram
 | Tabela | Ler | Escrever |
 |--------|-----|----------|
 | `perfis` | o próprio usuário; síndico lê todos | usuário altera só nome e celular |
+| `tipo_usuario` | qualquer usuário logado | ninguém pela API (só o dono do banco) |
 | `condominios` | síndico e moradores aprovados | só síndico |
 | `comunicados` | síndico e moradores aprovados | só síndico |
 | `comunicados_vistos` | o próprio usuário; síndico | cada um registra o seu |
@@ -126,12 +130,13 @@ sequenceDiagram
 | `sugestoes` | síndico e moradores aprovados | morador envia como pendente; só síndico avalia |
 | `app_secrets` | ninguém pela API | só por SQL, pelo dono do banco |
 
-Quem não está logado (`anon`) não acessa nenhuma tabela.
+Quem não está logado (`anon`) não acessa nenhuma tabela. A única coisa que `anon` executa é `validar_codigo_condominio`, que só responde sim ou não.
 
 ## 5. Regras que o próprio banco garante
 
 - **Perfil e aprovação** vêm do servidor. O que o usuário escreve em `user_metadata` não vale.
 - **Código de síndico errado** recusa o cadastro.
+- **Código de condomínio inexistente (ou ausente)** recusa o cadastro; o perfil nasce já ligado ao condomínio.
 - **Reserva em conflito** (mesmo espaço, horários que se cruzam) é barrada.
 - **Sugestão arquivada** exige motivo.
 - **Código do condomínio** é único e só em minúsculas.
@@ -143,5 +148,5 @@ Quem não está logado (`anon`) não acessa nenhuma tabela.
 **Dados ainda não separados por condomínio.** Só `perfis` aponta para `condominios`. Comunicados, eventos, atas e sugestões valem para todos, e o síndico enxerga tudo. Separar por condomínio exige `condominio_id` nessas tabelas e ajustar as policies.
 :::
 
-- O cadastro do app ainda não informa o condomínio.
-- Só os comunicados estão ligados ao app (listar, publicar e marcar como visto). Calendário, reservas, atas e sugestões continuam em memória; as tabelas estão prontas, mas o app ainda não as usa.
+- O isolamento por condomínio é só do app: depois do login ele confere o condomínio do usuário (`usuario_pertence_ao_condominio`), mas as policies e RPCs ainda não filtram por `condominio_id`.
+- Eventos criados pelo síndico (manutenção e reunião) ainda não têm tela: o calendário lê todos os eventos do banco, mas o app só grava reservas. Tampouco há upload do PDF da ata: a ata guarda o nome ou o link do arquivo.

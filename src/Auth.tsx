@@ -17,34 +17,63 @@ import { supabase } from "./supabase";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { PasswordInput } from "./components/password-input";
 import { avisar } from "./utils/avisar";
+import {
+  codigoExiste,
+  definirTipoDoLogin,
+  lerCodigoSalvo,
+  salvarCodigo,
+} from "./utils/codigoCondominio";
 
 // Regras de senha e e-mail no cliente: só conveniência. Quem vale é o painel do Supabase
 // (Authentication > Passwords); mantenha o mesmo mínimo lá.
 const SENHA_MIN = 8;
 const EMAIL_VALIDO = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-export function Auth() {
-  // --- BARREIRA DE CÓDIGO DO CONDOMÍNIO (LOCAL) ---
-  const CODIGO_VALIDO = "colinasderomaii.owl";
-  const CHAVE_STORAGE = "@condoowl:codigo_validado";
-
+// `conferindo`: o index.tsx está conferindo no servidor o condomínio de um login recém-feito.
+// `erroAcesso`: motivo da recusa dessa conferência, mostrado no card de login (e limpo por
+// `aoLimparErroAcesso` assim que a pessoa mexe nos campos).
+export function Auth({
+  conferindo = false,
+  erroAcesso = "",
+  aoLimparErroAcesso,
+}: {
+  conferindo?: boolean;
+  erroAcesso?: string;
+  aoLimparErroAcesso?: () => void;
+}) {
+  // --- BARREIRA DE CÓDIGO DO CONDOMÍNIO ---
+  // O código escolhe o condomínio; depois do login, o index.tsx confere no servidor se o
+  // usuário pertence a ele (usuarioPertence) antes de liberar o app.
   const [etapaAcesso, setEtapaAcesso] = useState<"codigo" | "login">("codigo");
   const [codigoCondominio, setCodigoCondominio] = useState("");
+  const [codigoValidado, setCodigoValidado] = useState("");
   const [erroCodigo, setErroCodigo] = useState("");
+  const [validandoCodigo, setValidandoCodigo] = useState(false);
+  // Lê o código guardado e o confere no servidor antes de decidir a tela (evita piscar).
+  const [restaurando, setRestaurando] = useState(true);
 
-  // Requisito 2: Se já validou antes, abre direto no login
+  // Se já validou antes e o código ainda existe, abre direto no login.
   useEffect(() => {
-    try {
-      if (typeof window !== "undefined" && window.localStorage) {
-        const codigoSalvo = window.localStorage.getItem(CHAVE_STORAGE);
-        if (codigoSalvo === CODIGO_VALIDO) {
-          setEtapaAcesso("login");
-        }
+    let ativo = true;
+    (async () => {
+      const salvo = await lerCodigoSalvo();
+      const valido = salvo ? await codigoExiste(salvo) : null;
+      if (!ativo) return;
+      if (salvo && valido) {
+        setCodigoValidado(salvo);
+        setEtapaAcesso("login");
+      } else if (salvo) {
+        if (valido === false) await salvarCodigo(null); // código removido do condomínio
+        setCodigoCondominio(salvo);
       }
-    } catch (e) {}
+      setRestaurando(false);
+    })();
+    return () => {
+      ativo = false;
+    };
   }, []);
 
-  const handleValidarCodigo = () => {
+  const handleValidarCodigo = async () => {
     const codigoLimpo = codigoCondominio.trim().toLowerCase();
 
     if (!codigoLimpo) {
@@ -52,23 +81,37 @@ export function Auth() {
       return;
     }
 
-    if (codigoLimpo === CODIGO_VALIDO) {
-      setErroCodigo("");
-      if (typeof window !== "undefined" && window.localStorage) {
-        window.localStorage.setItem(CHAVE_STORAGE, codigoLimpo);
-      }
-      setEtapaAcesso("login");
-    } else {
-      setErroCodigo("Código de condomínio incorreto ou não encontrado.");
+    setValidandoCodigo(true);
+    const valido = await codigoExiste(codigoLimpo);
+    setValidandoCodigo(false);
+
+    if (valido === null) {
+      setErroCodigo("Não foi possível verificar o código agora. Tente novamente.");
+      return;
     }
+    if (!valido) {
+      setErroCodigo("Código de condomínio não encontrado.");
+      return;
+    }
+
+    setErroCodigo("");
+    // Grava antes de liberar o login: a conferência pós-login lê este código. Se o
+    // aparelho não guardar, vale só até fechar o app (fica em memória) e a pessoa é avisada.
+    if (!(await salvarCodigo(codigoLimpo))) {
+      avisar(
+        "Atenção",
+        "Não foi possível guardar o código neste aparelho. Você precisará informá-lo de novo ao reabrir o app.",
+      );
+    }
+    setCodigoValidado(codigoLimpo);
+    setEtapaAcesso("login");
   };
 
-  // Requisito 1: Voltar para a tela de código
+  // Voltar para a tela de código
   const handleVoltarParaCodigo = () => {
-    if (typeof window !== "undefined" && window.localStorage) {
-      window.localStorage.removeItem(CHAVE_STORAGE);
-    }
+    salvarCodigo(null);
     setCodigoCondominio("");
+    setCodigoValidado("");
     setErroCodigo("");
     setEtapaAcesso("codigo");
   };
@@ -81,6 +124,14 @@ export function Auth() {
     "morador",
   );
   const [loading, setLoading] = useState(false);
+  const ocupado = loading || conferindo;
+  // Erro do login aparece no próprio card, não em alerta.
+  const [erroLogin, setErroLogin] = useState("");
+  const erroExibido = erroLogin || erroAcesso;
+  const limparErroLogin = () => {
+    if (erroLogin) setErroLogin("");
+    if (erroAcesso) aoLimparErroAcesso?.();
+  };
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -134,6 +185,7 @@ export function Auth() {
 
   const mudarTela = (novaTela: any) => {
     setView(novaTela);
+    limparErroLogin();
     setEmail("");
     setPassword("");
     setConfirmPassword("");
@@ -156,24 +208,28 @@ export function Auth() {
     if (msg.includes("email not confirmed"))
       return "E-mail não verificado. Por favor, valide o seu código.";
     if (msg.includes("invalid otp")) return "Código inválido ou expirado.";
-    // O gatilho do banco recusa o cadastro com código de síndico errado.
+    // O gatilho do banco recusa o cadastro com código de condomínio ou de síndico errado.
     if (msg.includes("database error saving new user"))
-      return "Não foi possível criar a conta. Se for síndico, confira o código único.";
+      return "Não foi possível criar a conta. Confira o código do condomínio e, se for síndico, o código único.";
     return "Ocorreu um erro inesperado. Tente novamente.";
   };
 
   const fazerLogin = async () => {
+    limparErroLogin();
     if (!email || !password) {
-      avisar("Atenção", "Preencha o e-mail e a senha.");
+      setErroLogin("Preencha o e-mail e a senha.");
       return;
     }
     setLoading(true);
+    // A aba escolhida (Morador/Síndico) é conferida no servidor depois do login (index.tsx).
+    definirTipoDoLogin(tipoUsuario);
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
     if (error) {
+      definirTipoDoLogin(null);
       if (error.message.includes("Email not confirmed")) {
         avisar(
           "E-mail não verificado",
@@ -181,7 +237,7 @@ export function Auth() {
         );
         setView("confirmar_otp");
       } else {
-        avisar("Erro no Login", traduzirErro(error.message));
+        setErroLogin(traduzirErro(error.message));
       }
     } else {
       // 👇 SUCESSO: Salva a preferência de manter a sessão 👇
@@ -228,7 +284,8 @@ export function Auth() {
       options: {
         data: {
           // Perfil e aprovação são definidos pelo banco (gatilho em auth.users);
-          // o app só envia o código digitado, que o servidor valida.
+          // o app só envia os códigos digitados, que o servidor valida.
+          codigo_condominio: codigoValidado,
           ...(tipoUsuario === "sindico" && { codigo_sindico: codigoSindico }),
           nome_completo: nome,
           data_nascimento: nascimento,
@@ -318,6 +375,22 @@ export function Auth() {
     }
     setLoading(false);
   };
+
+  // --- ESPERA: conferindo no servidor o código guardado ---
+  if (restaurando) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "#0f172a",
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
+        <ActivityIndicator color="#818cf8" size="large" />
+      </View>
+    );
+  }
 
   // --- ETAPA 1: TELA DE CÓDIGO DO CONDOMÍNIO ---
   if (etapaAcesso === "codigo") {
@@ -413,12 +486,18 @@ export function Auth() {
               padding: 16,
               borderRadius: 12,
               alignItems: "center",
+              opacity: validandoCodigo ? 0.7 : 1,
             }}
             onPress={handleValidarCodigo}
+            disabled={validandoCodigo}
           >
-            <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>
-              Acessar Condomínio
-            </Text>
+            {validandoCodigo ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>
+                Acessar Condomínio
+              </Text>
+            )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -468,6 +547,7 @@ export function Auth() {
           {/* 🟢 BOTÃO DE TROCAR CONDOMÍNIO (ESTILO PÍLULA) 🟢 */}
           <TouchableOpacity
             onPress={handleVoltarParaCodigo}
+            disabled={ocupado}
             style={{
               flexDirection: "row",
               alignItems: "center",
@@ -604,7 +684,10 @@ export function Auth() {
               autoCapitalize="none"
               keyboardType="email-address"
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(texto) => {
+                setEmail(texto);
+                limparErroLogin();
+              }}
               editable={view !== "recuperar" && view !== "confirmar_otp"}
             />
 
@@ -645,7 +728,10 @@ export function Auth() {
                 }
                 placeholderTextColor="#64748b"
                 value={password}
-                onChangeText={setPassword}
+                onChangeText={(texto) => {
+                  setPassword(texto);
+                  limparErroLogin();
+                }}
               />
             )}
 
@@ -694,9 +780,15 @@ export function Auth() {
               </View>
             )}
 
+            {view === "login" && erroExibido ? (
+              <Text style={styles.erroLogin} accessibilityRole="alert">
+                {erroExibido}
+              </Text>
+            ) : null}
+
             <TouchableOpacity
               style={styles.button}
-              disabled={loading}
+              disabled={ocupado}
               onPress={
                 view === "login"
                   ? fazerLogin
@@ -709,7 +801,7 @@ export function Auth() {
                         : redefinirSenha
               }
             >
-              {loading ? (
+              {ocupado ? (
                 <ActivityIndicator color="#fff" />
               ) : (
                 <Text style={styles.buttonText}>
@@ -825,6 +917,12 @@ const styles = StyleSheet.create({
     borderColor: "#334155",
   },
   // Fica logo abaixo do campo de senha: desfaz o marginBottom do input acima.
+  erroLogin: {
+    color: "#ef4444",
+    fontSize: 13,
+    marginBottom: 12,
+    textAlign: "center",
+  },
   dicaSenha: {
     color: "#94a3b8",
     fontSize: 13,

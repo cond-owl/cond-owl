@@ -2,7 +2,8 @@
 -- Branch fix/0001-vulnerabilidade-perfil-aprovacao.
 --
 -- NÃO é migração e NÃO deve rodar em produção: cria contas de teste. Rodar no SQL Editor
--- DEPOIS das migrações 0001 a 0011. As senhas são geradas aqui, aparecem só no resultado
+-- DEPOIS das migrações 0001 a 0014 (sem a 0013 o login conferiria o condomínio e falharia;
+-- sem a 0014 não existe o tipo de usuário que o login confere). As senhas são geradas aqui, aparecem só no resultado
 -- final desta execução e não ficam no repositório: copie na hora.
 -- Pode rodar de novo: quem já existe não é recriado nem tem a senha trocada.
 --
@@ -39,7 +40,8 @@ insert into _seed (email, nome, nasc, celular, unidade, papel, status, senha) va
 
 update _seed s set existia = exists (select 1 from auth.users u where u.email = s.email);
 
--- Cadastro: passa pelos gatilhos da 0003 (viram morador/pendente e ganham linha em perfis).
+-- Cadastro: passa pelos gatilhos da 0003 e da 0012 (viram morador/pendente e ganham linha
+-- em perfis já ligada ao condomínio; sem codigo_condominio o gatilho recusaria o cadastro).
 -- Os campos de token vazios ('') são exigidos pelo GoTrue; com NULL o login quebra.
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -50,7 +52,8 @@ select '00000000-0000-0000-0000-000000000000', s.uid, 'authenticated', 'authenti
        extensions.crypt(s.senha, extensions.gen_salt('bf')), now(),
        '{"provider":"email","providers":["email"]}'::jsonb,
        jsonb_build_object('nome_completo', s.nome, 'data_nascimento', s.nasc,
-                          'celular', s.celular, 'unidade', s.unidade),
+                          'celular', s.celular, 'unidade', s.unidade,
+                          'codigo_condominio', 'colinasderomaii.owl'),
        now(), now(), '', '', '', ''
   from _seed s
  where not s.existia;
@@ -73,7 +76,8 @@ update auth.users u
  where u.email = s.email
    and not s.existia;
 
--- Associação ao condomínio.
+-- Associação ao condomínio (o gatilho da 0012 já preenche; isto garante o vínculo em contas
+-- criadas antes dela).
 update public.perfis p
    set condominio_id = (select c.id from public.condominios c where c.codigo = 'colinasderomaii.owl')
   from _seed s

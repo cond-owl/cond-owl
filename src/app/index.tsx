@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from "react";
 import {
+  ActivityIndicator,
   StyleSheet,
   Text,
   View,
   TextInput,
   TouchableOpacity,
   ScrollView,
+  Linking,
   Modal,
   StatusBar,
   UIManager,
@@ -25,6 +27,26 @@ import { Auth } from "../Auth"; // Ajuste o caminho se necessário
 import { DateTimeField } from "../components/date-time-field";
 import { ModalOverlay } from "../components/modal-overlay";
 import { avisar } from "../utils/avisar";
+import {
+  definirTipoDoLogin,
+  lerCodigoSalvo,
+  lerTipoDoLogin,
+  usuarioEhDoTipo,
+  usuarioPertence,
+} from "../utils/codigoCondominio";
+import {
+  LIMITE,
+  avaliarSugestaoNoBanco,
+  carregarAtas,
+  carregarEventos,
+  carregarSugestoes,
+  criarAta,
+  criarReserva,
+  criarSugestao,
+  type Ata,
+  type Evento,
+  type Sugestao,
+} from "../utils/dadosCondominio";
 import {
   MESES,
   DIAS_SEMANA,
@@ -47,29 +69,6 @@ interface Comunicado {
   data: string;
   vistoPor: string[];
 }
-interface Evento {
-  data: string; // AAAA-MM-DD
-  tipo: string;
-  titulo: string;
-  detalhes: string;
-  horaInicio?: string;
-  horaFim?: string;
-}
-interface Reuniao {
-  data: string;
-  pauta: string;
-  link: string;
-}
-interface Ata {
-  mes: string;
-  reunioes: Reuniao[];
-}
-interface Sugestao {
-  id: number;
-  texto: string;
-  status: string;
-  motivo: string;
-}
 
 const ORIENTACOES: ("portrait" | "landscape")[] = ["portrait", "landscape"];
 
@@ -79,6 +78,14 @@ export default function App() {
   const [user, setUser] = useState<string | null>(null);
   const [isPending, setIsPending] = useState<boolean>(false);
   const [nomeUsuario, setNomeUsuario] = useState("Morador");
+  // Verdadeiro até a primeira decisão de sessão (inclui a conferência do condomínio).
+  const [verificandoSessao, setVerificandoSessao] = useState<boolean>(true);
+  // Verdadeiro enquanto o servidor confere o condomínio de um login recém-feito: o login
+  // fica travado (sem toques repetidos nem "Trocar condomínio" no meio da conferência).
+  const [conferindoCondominio, setConferindoCondominio] =
+    useState<boolean>(false);
+  // Motivo da recusa da conferência, mostrado no card de login.
+  const [erroAcesso, setErroAcesso] = useState<string>("");
 
   useEffect(() => {
     const organizarSessao = (sessaoDeAcesso: Session | null) => {
@@ -113,6 +120,74 @@ export default function App() {
       }
     };
 
+    // Só libera o app depois que o servidor confirma que o usuário pertence ao condomínio
+    // do código digitado na primeira tela. Até lá a sessão não é exposta (mostra o login ou
+    // a espera), então nada do app aparece para quem não passa na conferência.
+    let sequencia = 0; // descarta resposta de uma conferência já superada por outra sessão
+    let usuarioVerificado: string | null = null;
+
+    const receberSessao = (sessao: Session | null) => {
+      const minha = ++sequencia;
+
+      if (!sessao?.user) {
+        usuarioVerificado = null;
+        organizarSessao(null);
+        setVerificandoSessao(false);
+        setConferindoCondominio(false);
+        return;
+      }
+      // Renovação de token do mesmo usuário já conferido: não refaz a pergunta.
+      if (usuarioVerificado === sessao.user.id) {
+        organizarSessao(sessao);
+        setVerificandoSessao(false);
+        setConferindoCondominio(false);
+        return;
+      }
+
+      // Fora do callback do auth: chamar o Supabase de dentro dele pode travar.
+      setConferindoCondominio(true);
+      setTimeout(async () => {
+        const codigo = await lerCodigoSalvo();
+        const tipo = lerTipoDoLogin();
+        const pertence = codigo ? await usuarioPertence(codigo) : false;
+        // O tipo (aba Morador/Síndico) só é conferido se houve escolha neste login e o
+        // condomínio já passou; sessão restaurada na abertura não tem escolha.
+        const doTipo = pertence && tipo ? await usuarioEhDoTipo(tipo) : true;
+        if (minha !== sequencia) return;
+        definirTipoDoLogin(null); // a escolha vale para uma conferência só
+
+        if (pertence && doTipo) {
+          usuarioVerificado = sessao.user.id;
+          organizarSessao(sessao);
+          setVerificandoSessao(false);
+          setConferindoCondominio(false);
+          return;
+        }
+
+        // Falhou: nega por padrão e encerra a sessão. Sem código guardado (sessão de antes
+        // desta conferência) volta ao login sem aviso; o usuário informa o código de novo.
+        organizarSessao(null);
+        setVerificandoSessao(false);
+        setConferindoCondominio(false);
+        // scope local: encerra só este aparelho, sem derrubar o usuário nos outros.
+        await supabase.auth.signOut({ scope: "local" });
+        // O motivo aparece no card de login (Auth), não em alerta.
+        if (pertence === null || doTipo === null) {
+          setErroAcesso(
+            "Não foi possível verificar o seu acesso. Tente novamente.",
+          );
+        } else if (codigo && !pertence) {
+          setErroAcesso(
+            "Este usuário não pertence ao condomínio do código informado.",
+          );
+        } else if (codigo && tipo) {
+          setErroAcesso(
+            `Este usuário não é ${tipo === "sindico" ? "síndico" : "morador"}. Escolha a aba correta e entre de novo.`,
+          );
+        }
+      }, 0);
+    };
+
     const iniciarApp = async () => {
       // 1. Aplica a trava do "Manter conectado"
       if (typeof window !== "undefined" && window.localStorage) {
@@ -123,7 +198,8 @@ export default function App() {
         if (manter === "false") {
           await supabase.auth.signOut();
           window.localStorage.removeItem("@condoowl:manter_conectado");
-          return; // Para aqui, pois o signOut disparará o onAuthStateChange abaixo
+          receberSessao(null); // sem sessão não há conferência; garante sair da espera
+          return;
         }
       }
 
@@ -131,7 +207,7 @@ export default function App() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      organizarSessao(session);
+      receberSessao(session);
     };
 
     iniciarApp();
@@ -139,10 +215,13 @@ export default function App() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      organizarSessao(session);
+      receberSessao(session);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      sequencia++; // cancela conferência pendente
+      subscription.unsubscribe();
+    };
   }, []);
 
   // Se não estiver logado, bloqueia a tela e mostra o Login!
@@ -252,60 +331,49 @@ export default function App() {
     carregarComunicados().then(aplicarComunicados);
   }, [uidLogado, isPending]);
 
-  const [eventos, setEventos] = useState<Evento[]>([
-    {
-      data: "2026-10-15",
-      tipo: "manutencao",
-      titulo: "Piscina Interditada",
-      detalhes: "Limpeza e troca de filtros.",
-    },
-    {
-      data: "2026-10-20",
-      tipo: "reuniao",
-      titulo: "Assembleia Geral",
-      detalhes: "Horário: 19h30 no Salão de Festas.",
-    },
-    {
-      data: "2026-10-25",
-      tipo: "reserva",
-      titulo: "Reserva Salão de Festas",
-      detalhes: "Horário: 18h às 23h.",
-    },
-  ]);
+  // Eventos/reservas, atas e sugestões vêm do banco (tabelas eventos, atas e sugestoes;
+  // RLS: só síndico e morador aprovado leem). Cada lista tem o seu aviso de falha de carga.
+  const [eventos, setEventos] = useState<Evento[]>([]);
+  const [atas, setAtas] = useState<Ata[]>([]);
+  const [sugestoes, setSugestoes] = useState<Sugestao[]>([]);
+  const [errosCarga, setErrosCarga] = useState<{
+    eventos: string;
+    atas: string;
+    sugestoes: string;
+  }>({ eventos: "", atas: "", sugestoes: "" });
 
-  const [atas, setAtas] = useState<Ata[]>([
-    {
-      mes: "Outubro 2026",
-      reunioes: [
-        {
-          data: "10/10/2026",
-          pauta: "Segurança e Portaria",
-          link: "Ata_10_10.pdf",
-        },
-      ],
-    },
-    {
-      mes: "Setembro 2026",
-      reunioes: [
-        { data: "05/09/2026", pauta: "Orçamento Anual", link: "Ata_05_09.pdf" },
-      ],
-    },
-  ]);
+  const aplicarEventos = (lista: Evento[] | null) => {
+    setErrosCarga((e) => ({
+      ...e,
+      eventos: lista ? "" : "Não foi possível carregar o calendário.",
+    }));
+    if (lista) setEventos(lista);
+  };
+  const aplicarAtas = (lista: Ata[] | null) => {
+    setErrosCarga((e) => ({
+      ...e,
+      atas: lista ? "" : "Não foi possível carregar as atas.",
+    }));
+    if (lista) setAtas(lista);
+  };
+  const aplicarSugestoes = (lista: Sugestao[] | null) => {
+    setErrosCarga((e) => ({
+      ...e,
+      sugestoes: lista ? "" : "Não foi possível carregar as sugestões.",
+    }));
+    if (lista) setSugestoes(lista);
+  };
 
-  const [sugestoes, setSugestoes] = useState<Sugestao[]>([
-    {
-      id: 1,
-      texto: "Instalar câmeras no subsolo 2.",
-      status: "pendente",
-      motivo: "",
-    },
-    {
-      id: 2,
-      texto: "Trocar o bebedouro da academia.",
-      status: "arquivada",
-      motivo: "Orçamento insuficiente para este ano.",
-    },
-  ]);
+  // Recarrega ao entrar em cada aba, para ver o que os outros moradores fizeram
+  // (reservas de outros, sugestões e atas novas).
+  useEffect(() => {
+    if (!uidLogado || isPending) return;
+    if (activeTab === "calendario") carregarEventos().then(aplicarEventos);
+    if (activeTab === "atas") {
+      carregarAtas().then(aplicarAtas);
+      carregarSugestoes().then(aplicarSugestoes);
+    }
+  }, [uidLogado, isPending, activeTab]);
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedMesAta, setSelectedMesAta] = useState<string | null>(null);
@@ -365,7 +433,10 @@ export default function App() {
   };
 
   // --- FUNÇÃO QUE SALVA A RESERVA ---
-  const solicitarReserva = () => {
+  const [salvandoReserva, setSalvandoReserva] = useState<boolean>(false);
+
+  const solicitarReserva = async () => {
+    if (salvandoReserva) return;
     if (
       !novaReserva.titulo ||
       !novaReserva.horaInicio ||
@@ -430,16 +501,24 @@ export default function App() {
         "Este espaço já está reservado para este horário neste dia.",
       );
     }
-    const novoEvento: Evento = {
+
+    // O banco decide: a checagem acima é só um aviso rápido (duas pessoas reservando ao
+    // mesmo tempo só são separadas pela constraint de conflito do banco).
+    setSalvandoReserva(true);
+    const erro = await criarReserva({
       data: chaveReserva,
-      tipo: "reserva",
-      titulo: novaReserva.titulo,
+      espaco: novaReserva.titulo,
       horaInicio: novaReserva.horaInicio,
       horaFim: novaReserva.horaFim,
-      detalhes: `Horário: ${novaReserva.horaInicio} às ${novaReserva.horaFim}\n${novaReserva.detalhes}`,
-    };
+      detalhes: novaReserva.detalhes,
+    });
+    // Recarrega de qualquer jeito: em caso de conflito, mostra a reserva que o causou.
+    aplicarEventos(await carregarEventos());
+    setSalvandoReserva(false);
+    if (erro) {
+      return avisar("Não foi possível reservar", erro);
+    }
 
-    setEventos([...eventos, novoEvento]);
     // Leva o calendário para o mês da reserva, para o usuário ver o que marcou.
     setMesVisivel({
       ano: dataReserva.getFullYear(),
@@ -525,44 +604,108 @@ export default function App() {
     aplicarComunicados(await carregarComunicados());
   };
 
-  const enviarSugestao = () => {
-    if (!novaSugestaoTexto) return;
+  const [salvandoSugestao, setSalvandoSugestao] = useState<boolean>(false);
+
+  const enviarSugestao = async () => {
+    if (salvandoSugestao) return;
+    if (!novaSugestaoTexto.trim()) return;
+    setSalvandoSugestao(true);
+    const erro = await criarSugestao(novaSugestaoTexto);
+    if (erro) {
+      setSalvandoSugestao(false);
+      return avisar("Erro", erro);
+    }
+    aplicarSugestoes(await carregarSugestoes());
+    setSalvandoSugestao(false);
     animate();
-    setSugestoes([
-      {
-        id: Date.now(),
-        texto: novaSugestaoTexto,
-        status: "pendente",
-        motivo: "",
-      },
-      ...sugestoes,
-    ]);
     setShowNovaSugestao(false);
     setNovaSugestaoTexto("");
   };
 
-  const avaliarSugestao = (id: number | null, acao: string) => {
-    if (id === null) return;
-    if (acao === "arquivada" && !motivoArquivamento)
+  const avaliarSugestao = async (id: number | null, acao: string) => {
+    if (id === null || salvandoSugestao) return;
+    if (acao !== "aprovada" && acao !== "arquivada") return;
+    if (acao === "arquivada" && !motivoArquivamento.trim())
       return avisar("Atenção", "É obrigatório justificar o arquivamento.");
+    setSalvandoSugestao(true);
+    const erro = await avaliarSugestaoNoBanco(id, acao, motivoArquivamento);
+    if (erro) {
+      setSalvandoSugestao(false);
+      return avisar("Erro", erro);
+    }
+    aplicarSugestoes(await carregarSugestoes());
+    setSalvandoSugestao(false);
     animate();
-    setSugestoes((prev) =>
-      prev.map((s) =>
-        s.id === id
-          ? {
-              ...s,
-              status: acao,
-              motivo: acao === "arquivada" ? motivoArquivamento : "",
-            }
-          : s,
-      ),
-    );
     setShowAvaliarSugestao(null);
     setMotivoArquivamento("");
   };
 
+  // --- ATAS (só o síndico cadastra) ---
+  const [showNovaAta, setShowNovaAta] = useState<boolean>(false);
+  const [dataAta, setDataAta] = useState<Date>(new Date());
+  const [novaAta, setNovaAta] = useState({ pauta: "", arquivo: "" });
+  const [salvandoAta, setSalvandoAta] = useState<boolean>(false);
+  // Erro mostrado dentro do modal, junto do formulário.
+  const [erroNovaAta, setErroNovaAta] = useState<string>("");
+
+  const salvarAta = async () => {
+    if (salvandoAta) return;
+    if (!novaAta.pauta.trim() || !novaAta.arquivo.trim()) {
+      setErroNovaAta("Informe a pauta e o arquivo (nome ou link do PDF).");
+      return;
+    }
+    setSalvandoAta(true);
+    setErroNovaAta("");
+    const erro = await criarAta({
+      data: chaveData(dataAta),
+      pauta: novaAta.pauta,
+      arquivo: novaAta.arquivo,
+    });
+    if (erro) {
+      setSalvandoAta(false);
+      setErroNovaAta(erro);
+      return;
+    }
+    aplicarAtas(await carregarAtas());
+    setSalvandoAta(false);
+    animate();
+    setShowNovaAta(false);
+    setNovaAta({ pauta: "", arquivo: "" });
+    setDataAta(new Date());
+  };
+
+  // O arquivo da ata é nome ou link. Só http(s) abre (nunca outro esquema, como javascript:).
+  const ehLinkAta = (arquivo: string) => /^https?:\/\//i.test(arquivo);
+  const abrirLinkAta = (link: string) => {
+    if (!ehLinkAta(link)) return;
+    Linking.openURL(link).catch(() =>
+      avisar("Erro", "Não foi possível abrir o arquivo."),
+    );
+  };
+
+  if (verificandoSessao) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "#0f172a",
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
+        <ActivityIndicator color="#818cf8" size="large" />
+      </View>
+    );
+  }
+
   if (!session) {
-    return <Auth />;
+    return (
+      <Auth
+        conferindo={conferindoCondominio}
+        erroAcesso={erroAcesso}
+        aoLimparErroAcesso={() => setErroAcesso("")}
+      />
+    );
   }
 
   //Tela de pendente para moradores aguardando aprovacao do sindico.
@@ -889,6 +1032,11 @@ export default function App() {
           {/* === ABA: CALENDÁRIO === */}
           {activeTab === "calendario" && (
             <View>
+              {errosCarga.eventos !== "" && (
+                <Text style={{ color: theme.danger, marginBottom: 12 }}>
+                  {errosCarga.eventos}
+                </Text>
+              )}
               <View style={styles.pageHeader}>
                 <View style={{ flex: 1, marginRight: 12 }}>
                   <Text style={[styles.pageTitle, { color: theme.text }]}>
@@ -1083,14 +1231,39 @@ export default function App() {
           {/* === ABA: ATAS E SUGESTÕES === */}
           {activeTab === "atas" && (
             <View>
-              <Text
-                style={[
-                  styles.pageTitle,
-                  { color: theme.text, marginBottom: 15 },
-                ]}
-              >
-                Biblioteca de Atas
-              </Text>
+              <View style={styles.pageHeader}>
+                <Text style={[styles.pageTitle, { color: theme.text }]}>
+                  Biblioteca de Atas
+                </Text>
+                {user === "sindico" && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setErroNovaAta("");
+                      setShowNovaAta(true);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <LinearGradient
+                      colors={theme.primary as [string, string]}
+                      start={{ x: 0, y: 0 }}
+                      style={styles.btnSmallGradient}
+                    >
+                      <Feather name="plus" size={16} color="#FFF" />
+                      <Text style={styles.btnTextSmall}>Nova ata</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                )}
+              </View>
+              {errosCarga.atas !== "" && (
+                <Text style={{ color: theme.danger, marginBottom: 12 }}>
+                  {errosCarga.atas}
+                </Text>
+              )}
+              {errosCarga.atas === "" && atas.length === 0 && (
+                <Text style={{ color: theme.textMuted, marginBottom: 12 }}>
+                  Nenhuma ata cadastrada ainda.
+                </Text>
+              )}
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -1165,6 +1338,16 @@ export default function App() {
                 )}
               </View>
 
+              {errosCarga.sugestoes !== "" && (
+                <Text style={{ color: theme.danger, marginBottom: 12 }}>
+                  {errosCarga.sugestoes}
+                </Text>
+              )}
+              {errosCarga.sugestoes === "" && sugestoes.length === 0 && (
+                <Text style={{ color: theme.textMuted, marginBottom: 12 }}>
+                  Nenhuma sugestão enviada ainda.
+                </Text>
+              )}
               {sugestoes.map((s) => (
                 <View
                   key={s.id}
@@ -1643,19 +1826,23 @@ export default function App() {
                 placeholder="Descreva sua sugestão..."
                 placeholderTextColor={theme.textMuted}
                 multiline
+                maxLength={LIMITE.sugestao}
                 value={novaSugestaoTexto}
                 onChangeText={setNovaSugestaoTexto}
               />
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6 }}
+                  style={{ flex: 1, marginRight: 6, opacity: salvandoSugestao ? 0.6 : 1 }}
+                  disabled={salvandoSugestao}
                   onPress={enviarSugestao}
                 >
                   <LinearGradient
                     colors={theme.primary as [string, string]}
                     style={styles.btnGradient}
                   >
-                    <Text style={styles.btnText}>Enviar</Text>
+                    <Text style={styles.btnText}>
+                      {salvandoSugestao ? "Enviando..." : "Enviar"}
+                    </Text>
                   </LinearGradient>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -1810,6 +1997,116 @@ export default function App() {
           </ModalOverlay>
         </Modal>
 
+        {/* Modal: Nova Ata (síndico) */}
+        <Modal
+          visible={showNovaAta}
+          transparent
+          animationType="slide"
+          supportedOrientations={ORIENTACOES}
+          onRequestClose={() => setShowNovaAta(false)}
+        >
+          <ModalOverlay>
+            <View
+              style={[styles.modalContent, { backgroundColor: theme.card }]}
+            >
+              <Text
+                style={[
+                  styles.pageTitle,
+                  { color: theme.text, marginBottom: 15 },
+                ]}
+              >
+                Nova Ata
+              </Text>
+
+              <Text
+                style={{
+                  color: theme.text,
+                  fontSize: 12,
+                  marginBottom: 4,
+                  fontWeight: "600",
+                }}
+              >
+                Data da reunião
+              </Text>
+              <DateTimeField
+                mode="date"
+                label="Data da reunião"
+                value={dataAta}
+                onChange={setDataAta}
+                isDark={isDark}
+                colors={theme}
+              />
+
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    color: theme.text,
+                    borderColor: theme.border,
+                    backgroundColor: theme.bg,
+                  },
+                ]}
+                placeholder="Pauta da reunião"
+                placeholderTextColor={theme.textMuted}
+                maxLength={LIMITE.pauta}
+                value={novaAta.pauta}
+                onChangeText={(t) => setNovaAta({ ...novaAta, pauta: t })}
+              />
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    color: theme.text,
+                    borderColor: theme.border,
+                    backgroundColor: theme.bg,
+                  },
+                ]}
+                placeholder="Arquivo (nome ou link do PDF)"
+                placeholderTextColor={theme.textMuted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                maxLength={LIMITE.arquivo}
+                value={novaAta.arquivo}
+                onChangeText={(t) => setNovaAta({ ...novaAta, arquivo: t })}
+              />
+
+              {erroNovaAta !== "" && (
+                <Text style={{ color: "#ef4444", marginBottom: 10 }}>
+                  {erroNovaAta}
+                </Text>
+              )}
+
+              <View style={styles.row}>
+                <TouchableOpacity
+                  style={{ flex: 1, marginRight: 6, opacity: salvandoAta ? 0.6 : 1 }}
+                  disabled={salvandoAta}
+                  onPress={salvarAta}
+                >
+                  <LinearGradient
+                    colors={theme.primary as [string, string]}
+                    style={styles.btnGradient}
+                  >
+                    <Text style={styles.btnText}>
+                      {salvandoAta ? "Salvando..." : "Salvar"}
+                    </Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.btnOutline,
+                    { borderColor: theme.border, flex: 1, marginLeft: 6 },
+                  ]}
+                  onPress={() => setShowNovaAta(false)}
+                >
+                  <Text style={{ color: theme.text, fontWeight: "700" }}>
+                    Cancelar
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </ModalOverlay>
+        </Modal>
+
         {/* Modal: Ler Atas */}
         <Modal
           visible={!!selectedMesAta}
@@ -1863,26 +2160,34 @@ export default function App() {
                     >
                       Pauta: {r.pauta}
                     </Text>
-                    <TouchableOpacity
-                      style={[
-                        styles.btnOutline,
-                        {
-                          borderColor: theme.primary[0],
-                          padding: 10,
-                          backgroundColor: theme.primary[0] + "10",
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={{
-                          color: theme.primary[0],
-                          fontWeight: "700",
-                          textAlign: "center",
-                        }}
+                    {ehLinkAta(r.link) ? (
+                      <TouchableOpacity
+                        onPress={() => abrirLinkAta(r.link)}
+                        style={[
+                          styles.btnOutline,
+                          {
+                            borderColor: theme.primary[0],
+                            padding: 10,
+                            backgroundColor: theme.primary[0] + "10",
+                          },
+                        ]}
                       >
-                        Abrir PDF
+                        <Text
+                          style={{
+                            color: theme.primary[0],
+                            fontWeight: "700",
+                            textAlign: "center",
+                          }}
+                        >
+                          Abrir PDF
+                        </Text>
+                      </TouchableOpacity>
+                    ) : (
+                      // Sem link (só o nome do arquivo): não há o que abrir.
+                      <Text style={{ color: theme.textMuted, fontSize: 13 }}>
+                        Arquivo: {r.link}
                       </Text>
-                    </TouchableOpacity>
+                    )}
                   </View>
                 ))}
               <TouchableOpacity
@@ -1941,6 +2246,7 @@ export default function App() {
                 placeholder="Digite o motivo obrigatório..."
                 placeholderTextColor={theme.textMuted}
                 multiline
+                maxLength={LIMITE.motivo}
                 value={motivoArquivamento}
                 onChangeText={setMotivoArquivamento}
               />
@@ -2155,6 +2461,7 @@ export default function App() {
                 placeholder="Detalhes adicionais (opcional)"
                 placeholderTextColor={theme.textMuted}
                 multiline
+                maxLength={LIMITE.detalhes}
                 value={novaReserva.detalhes}
                 onChangeText={(t) =>
                   setNovaReserva({ ...novaReserva, detalhes: t })
@@ -2163,14 +2470,17 @@ export default function App() {
 
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6 }}
+                  style={{ flex: 1, marginRight: 6, opacity: salvandoReserva ? 0.6 : 1 }}
+                  disabled={salvandoReserva}
                   onPress={solicitarReserva}
                 >
                   <LinearGradient
                     colors={theme.primary as [string, string]}
                     style={styles.btnGradient}
                   >
-                    <Text style={styles.btnText}>Confirmar</Text>
+                    <Text style={styles.btnText}>
+                      {salvandoReserva ? "Reservando..." : "Confirmar"}
+                    </Text>
                   </LinearGradient>
                 </TouchableOpacity>
                 <TouchableOpacity
