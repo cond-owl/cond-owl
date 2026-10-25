@@ -1,22 +1,21 @@
-import React, { useState, useEffect } from "react";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useEffect, useState } from "react";
 import {
-  View,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
-  ActivityIndicator,
-  StyleSheet,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Switch,
   useWindowDimensions,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { supabase } from "./supabase";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { PasswordInput } from "./components/password-input";
-import { avisar } from "./utils/avisar";
+import { supabase } from "./supabase";
 import {
   codigoExiste,
   definirTipoDoLogin,
@@ -48,8 +47,19 @@ export function Auth({
   const [codigoCondominio, setCodigoCondominio] = useState("");
   const [codigoValidado, setCodigoValidado] = useState("");
   const [erroCodigo, setErroCodigo] = useState("");
+
+  // --- ESTADO DO MODAL DE ALERTA ---
+  const [alerta, setAlerta] = useState({
+    visivel: false,
+    titulo: "",
+    mensagem: "",
+  });
+
+  const mostrarAlerta = (titulo: string, mensagem: string) => {
+    setAlerta({ visivel: true, titulo, mensagem });
+  };
+
   const [validandoCodigo, setValidandoCodigo] = useState(false);
-  // Lê o código guardado e o confere no servidor antes de decidir a tela (evita piscar).
   const [restaurando, setRestaurando] = useState(true);
 
   // Se já validou antes e o código ainda existe, abre direto no login.
@@ -86,7 +96,9 @@ export function Auth({
     setValidandoCodigo(false);
 
     if (valido === null) {
-      setErroCodigo("Não foi possível verificar o código agora. Tente novamente.");
+      setErroCodigo(
+        "Não foi possível verificar o código agora. Tente novamente.",
+      );
       return;
     }
     if (!valido) {
@@ -98,7 +110,7 @@ export function Auth({
     // Grava antes de liberar o login: a conferência pós-login lê este código. Se o
     // aparelho não guardar, vale só até fechar o app (fica em memória) e a pessoa é avisada.
     if (!(await salvarCodigo(codigoLimpo))) {
-      avisar(
+      mostrarAlerta(
         "Atenção",
         "Não foi possível guardar o código neste aparelho. Você precisará informá-lo de novo ao reabrir o app.",
       );
@@ -231,7 +243,7 @@ export function Auth({
     if (error) {
       definirTipoDoLogin(null);
       if (error.message.includes("Email not confirmed")) {
-        avisar(
+        mostrarAlerta(
           "E-mail não verificado",
           "Insira o código que enviámos para o seu e-mail.",
         );
@@ -253,27 +265,36 @@ export function Auth({
 
   const fazerCadastro = async () => {
     if (!nome || !nascimento || !celular || !email || !password) {
-      avisar("Atenção", "Por favor, preencha todos os dados pessoais.");
+      mostrarAlerta("Atenção", "Por favor, preencha todos os dados pessoais.");
       return;
     }
     if (unidade === "Apto: " || unidade.trim() === "Apto:") {
-      avisar("Atenção", "Por favor, informe o número do seu Apartamento.");
+      mostrarAlerta(
+        "Atenção",
+        "Por favor, informe o número do seu Apartamento.",
+      );
       return;
     }
     if (!EMAIL_VALIDO.test(email.trim())) {
-      avisar("Atenção", "Informe um e-mail válido.");
+      mostrarAlerta("Atenção", "Informe um e-mail válido.");
       return;
     }
     if (password.length < SENHA_MIN) {
-      avisar("Atenção", `A senha deve ter no mínimo ${SENHA_MIN} caracteres.`);
+      mostrarAlerta(
+        "Atenção",
+        `A senha deve ter no mínimo ${SENHA_MIN} caracteres.`,
+      );
       return;
     }
     if (password !== confirmPassword) {
-      avisar("Atenção", "As senhas não coincidem. Verifique a digitação.");
+      mostrarAlerta(
+        "Atenção",
+        "As senhas não coincidem. Verifique a digitação.",
+      );
       return;
     }
     if (tipoUsuario === "sindico" && !codigoSindico) {
-      avisar("Atenção", "Informe o código único de síndico.");
+      mostrarAlerta("Atenção", "Informe o código único de síndico.");
       return;
     }
 
@@ -296,9 +317,9 @@ export function Auth({
     });
 
     if (error) {
-      avisar("Erro no Cadastro", traduzirErro(error.message));
+      mostrarAlerta("Erro no Cadastro", traduzirErro(error.message));
     } else {
-      avisar(
+      mostrarAlerta(
         "Quase lá!",
         "Enviámos um código para o seu e-mail. Confirme para finalizar a criação da conta.",
       );
@@ -310,7 +331,7 @@ export function Auth({
 
   const confirmarCadastroOTP = async () => {
     if (!token || token.length < 6) {
-      avisar("Atenção", "Digite o código recebido no e-mail.");
+      mostrarAlerta("Atenção", "Digite o código recebido no e-mail.");
       return;
     }
     setLoading(true);
@@ -320,9 +341,9 @@ export function Auth({
       type: "signup",
     });
     if (error) {
-      avisar("Erro", traduzirErro(error.message));
+      mostrarAlerta("Erro", traduzirErro(error.message));
     } else {
-      avisar("Sucesso!", "Conta verificada! Já pode entrar no app.");
+      mostrarAlerta("Sucesso!", "Conta verificada! Já pode entrar no app.");
       mudarTela("login");
     }
     setLoading(false);
@@ -330,17 +351,20 @@ export function Auth({
 
   const pedirCodigo = async () => {
     if (!email.trim()) {
-      avisar("Atenção", "Informe o seu e-mail.");
+      mostrarAlerta("Atenção", "Informe o seu e-mail.");
       return;
     }
     setLoading(true);
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
     if (error) {
       // Mensagem única: não revela se o e-mail tem conta (só rede/limite de envios falham aqui).
-      avisar("Erro", "Não foi possível enviar agora. Tente novamente em instantes.");
+      mostrarAlerta(
+        "Erro",
+        "Não foi possível enviar agora. Tente novamente em instantes.",
+      );
     } else {
       // Mesma resposta exista conta ou não.
-      avisar(
+      mostrarAlerta(
         "Verifique o seu e-mail",
         "Se o e-mail estiver cadastrado, enviamos um código.",
       );
@@ -353,7 +377,10 @@ export function Auth({
     // Antes de verificar o código: o código é de uso único e não deve ser gasto
     // com uma senha que seria recusada.
     if (password.length < SENHA_MIN) {
-      avisar("Atenção", `A senha deve ter no mínimo ${SENHA_MIN} caracteres.`);
+      mostrarAlerta(
+        "Atenção",
+        `A senha deve ter no mínimo ${SENHA_MIN} caracteres.`,
+      );
       return;
     }
     setLoading(true);
@@ -363,14 +390,16 @@ export function Auth({
       type: "recovery",
     });
     if (otpError) {
-      avisar("Erro", "Código inválido.");
+      mostrarAlerta("Erro", "Código inválido.");
       setLoading(false);
       return;
     }
-    const { error: updateError } = await supabase.auth.updateUser({ password });
-    if (updateError) avisar("Erro", traduzirErro(updateError.message));
+    const { error: updateError } = await supabase.auth.updateUser({
+      password,
+    });
+    if (updateError) mostrarAlerta("Erro", traduzirErro(updateError.message));
     else {
-      avisar("Sucesso", "Senha alterada!");
+      mostrarAlerta("Sucesso", "Senha alterada!");
       mudarTela("login");
     }
     setLoading(false);
@@ -773,7 +802,11 @@ export function Auth({
                   thumbColor={manterConectado ? "#fff" : "#94a3b8"}
                 />
                 <Text
-                  style={{ color: "#cbd5e1", marginLeft: 8, fontWeight: "500" }}
+                  style={{
+                    color: "#cbd5e1",
+                    marginLeft: 8,
+                    fontWeight: "500",
+                  }}
                 >
                   Manter conectado
                 </Text>
@@ -952,5 +985,54 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontWeight: "600",
     fontSize: 15,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.7)", // Fundo escuro e opaco
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  modalCaixa: {
+    backgroundColor: "#1e293b",
+    borderRadius: 20,
+    padding: 24,
+    width: "100%",
+    maxWidth: 340,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#334155",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 8, // Sombra para o Android
+  },
+  modalTitulo: {
+    fontSize: 22,
+    fontWeight: "bold",
+    color: "#f8fafc",
+    marginBottom: 12,
+    textAlign: "center",
+  },
+  modalMensagem: {
+    fontSize: 15,
+    color: "#cbd5e1",
+    textAlign: "center",
+    marginBottom: 28,
+    lineHeight: 22,
+  },
+  modalBotao: {
+    backgroundColor: "#6366f1",
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    width: "100%",
+    alignItems: "center",
+  },
+  modalBotaoTexto: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
   },
 });
