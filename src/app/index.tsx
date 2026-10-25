@@ -1,32 +1,44 @@
-import React, { useState, useEffect } from "react";
+import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Session } from "@supabase/supabase-js";
+import { BlurView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  StyleSheet,
-  Text,
-  View,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
+  LayoutAnimation,
   Linking,
   Modal,
+  ScrollView,
   StatusBar,
-  UIManager,
-  LayoutAnimation,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
   useWindowDimensions,
 } from "react-native";
 import {
   SafeAreaView,
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
-import { Ionicons, Feather, MaterialCommunityIcons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
-import { BlurView } from "expo-blur";
-import { Session } from "@supabase/supabase-js";
-import { supabase } from "../supabase"; // Ajuste o caminho se necessário
 import { Auth } from "../Auth"; // Ajuste o caminho se necessário
 import { DateTimeField } from "../components/date-time-field";
 import { ModalOverlay } from "../components/modal-overlay";
+import { supabase } from "../supabase"; // Ajuste o caminho se necessário
 import { avisar } from "../utils/avisar";
+import {
+  DIAS_SEMANA,
+  MESES,
+  chaveData,
+  chaveDe,
+  dataDaChave,
+  diasNoMes,
+  formatarDataLonga,
+  formatarHora,
+  horaParaData,
+  inicioDoDia,
+} from "../utils/calendario";
 import {
   definirTipoDoLogin,
   lerCodigoSalvo,
@@ -47,18 +59,7 @@ import {
   type Evento,
   type Sugestao,
 } from "../utils/dadosCondominio";
-import {
-  MESES,
-  DIAS_SEMANA,
-  chaveDe,
-  chaveData,
-  dataDaChave,
-  inicioDoDia,
-  diasNoMes,
-  formatarDataLonga,
-  formatarHora,
-  horaParaData,
-} from "../utils/calendario";
+import { solicitarPermissaoNotificacao } from "../utils/notificacoes";
 
 // --- INTERFACES ---
 interface Comunicado {
@@ -73,6 +74,50 @@ interface Comunicado {
 const ORIENTACOES: ("portrait" | "landscape")[] = ["portrait", "landscape"];
 
 export default function App() {
+  // ==========================================
+  // --- PREFERÊNCIAS DE NOTIFICAÇÃO ---
+  // ==========================================
+  const [prefsNotificacoes, setPrefsNotificacoes] = useState({
+    manutencao: true,
+    social: true,
+  });
+
+  const carregarPreferencias = async (uid: string) => {
+    const { data } = await supabase
+      .from("perfis")
+      .select("notifica_manutencao, notifica_social")
+      .eq("id", uid)
+      .single();
+
+    if (data) {
+      setPrefsNotificacoes({
+        manutencao: data.notifica_manutencao ?? true,
+        social: data.notifica_social ?? true,
+      });
+    }
+  };
+
+  const alternarPreferencia = async (
+    chave: "manutencao" | "social",
+    valor: boolean,
+  ) => {
+    // 1. Atualiza visualmente na hora
+    setPrefsNotificacoes((prev) => ({ ...prev, [chave]: valor }));
+
+    // 2. Grava silenciosamente no banco de dados
+    const coluna =
+      chave === "manutencao" ? "notifica_manutencao" : "notifica_social";
+    const { error } = await supabase
+      .from("perfis")
+      .update({ [coluna]: valor })
+      .eq("id", session?.user.id);
+
+    if (error) {
+      alert("Não foi possível guardar a sua preferência.");
+      // Reverte o botão se der erro
+      setPrefsNotificacoes((prev) => ({ ...prev, [chave]: !valor }));
+    }
+  };
   // --- SISTEMA DE AUTENTICAÇÃO ---
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<string | null>(null);
@@ -304,7 +349,9 @@ export default function App() {
   const carregarComunicados = async (): Promise<Comunicado[] | null> => {
     const { data, error } = await supabase
       .from("comunicados")
-      .select("id, tipo, titulo, texto, created_at, comunicados_vistos(user_id)")
+      .select(
+        "id, tipo, titulo, texto, created_at, comunicados_vistos(user_id)",
+      )
       .order("created_at", { ascending: false });
     if (error) return null;
     return (data ?? []).map((c: any) => ({
@@ -320,15 +367,22 @@ export default function App() {
   };
 
   const aplicarComunicados = (lista: Comunicado[] | null) => {
-    setErroComunicados(lista ? "" : "Não foi possível carregar os comunicados.");
+    setErroComunicados(
+      lista ? "" : "Não foi possível carregar os comunicados.",
+    );
     if (lista) setComunicados(lista);
   };
-
   // Carrega quando há sessão liberada (morador pendente não passa do RLS).
   const uidLogado = session?.user.id;
+
   useEffect(() => {
     if (!uidLogado || isPending) return;
+
     carregarComunicados().then(aplicarComunicados);
+
+    // Pede a permissão e guarda o Token assim que o mural abre
+    solicitarPermissaoNotificacao(uidLogado);
+    carregarPreferencias(uidLogado);
   }, [uidLogado, isPending]);
 
   // Eventos/reservas, atas e sugestões vêm do banco (tabelas eventos, atas e sugestoes;
@@ -1591,7 +1645,173 @@ export default function App() {
               )}
             </View>
           )}
+          {/* === ABA: CONFIGURAÇÕES === */}
+          {activeTab === "configuracoes" && (
+            <View
+              style={{
+                flex: 1,
+                paddingTop: 20,
+                paddingBottom: 100,
+                paddingHorizontal: 4,
+              }}
+            >
+              <Text
+                style={[
+                  styles.pageTitle,
+                  { color: theme.text, marginBottom: 20 },
+                ]}
+              >
+                Configurações
+              </Text>
+
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  fontSize: 14,
+                  fontWeight: "bold",
+                  textTransform: "uppercase",
+                  marginBottom: 12,
+                  marginLeft: 4,
+                }}
+              >
+                Notificações Push
+              </Text>
+
+              <View
+                style={[
+                  styles.card,
+                  {
+                    backgroundColor: theme.card,
+                    borderColor: theme.border,
+                    padding: 16,
+                  },
+                ]}
+              >
+                <Text
+                  style={{
+                    color: theme.textMuted,
+                    fontSize: 13,
+                    marginBottom: 16,
+                    lineHeight: 20,
+                  }}
+                >
+                  Escolha os tipos de comunicados opcionais que deseja receber
+                  no seu telemóvel. Avisos urgentes e de reuniões são sempre
+                  enviados.
+                </Text>
+
+                {/* Switch Manutenção */}
+                <View
+                  style={[
+                    styles.rowBetween,
+                    {
+                      marginBottom: 16,
+                      borderBottomWidth: 1,
+                      borderBottomColor: theme.border,
+                      paddingBottom: 16,
+                    },
+                  ]}
+                >
+                  <View style={styles.row}>
+                    <View
+                      style={[
+                        styles.tag,
+                        {
+                          backgroundColor: theme.warning + "1A",
+                          marginRight: 12,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name="build-outline"
+                        size={16}
+                        color={theme.warning}
+                      />
+                    </View>
+                    <View>
+                      <Text
+                        style={{
+                          color: theme.text,
+                          fontSize: 16,
+                          fontWeight: "bold",
+                        }}
+                      >
+                        Manutenção
+                      </Text>
+                      <Text
+                        style={{
+                          color: theme.textMuted,
+                          fontSize: 12,
+                          marginTop: 2,
+                        }}
+                      >
+                        Obras, limpeza e reparações
+                      </Text>
+                    </View>
+                  </View>
+                  <Switch
+                    trackColor={{ false: theme.border, true: theme.primary[0] }}
+                    thumbColor={"#FFF"}
+                    onValueChange={(valor) =>
+                      alternarPreferencia("manutencao", valor)
+                    }
+                    value={prefsNotificacoes.manutencao}
+                  />
+                </View>
+
+                {/* Switch Social */}
+                <View style={styles.rowBetween}>
+                  <View style={styles.row}>
+                    <View
+                      style={[
+                        styles.tag,
+                        {
+                          backgroundColor: theme.success + "1A",
+                          marginRight: 12,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name="cafe-outline"
+                        size={16}
+                        color={theme.success}
+                      />
+                    </View>
+                    <View>
+                      <Text
+                        style={{
+                          color: theme.text,
+                          fontSize: 16,
+                          fontWeight: "bold",
+                        }}
+                      >
+                        Social
+                      </Text>
+                      <Text
+                        style={{
+                          color: theme.textMuted,
+                          fontSize: 12,
+                          marginTop: 2,
+                        }}
+                      >
+                        Eventos e confraternizações
+                      </Text>
+                    </View>
+                  </View>
+                  <Switch
+                    trackColor={{ false: theme.border, true: theme.primary[0] }}
+                    thumbColor={"#FFF"}
+                    onValueChange={(valor) =>
+                      alternarPreferencia("social", valor)
+                    }
+                    value={prefsNotificacoes.social}
+                  />
+                </View>
+              </View>
+            </View>
+          )}
         </ScrollView>
+
         {/* === BOTTOM TAB BAR (FLOATING & BLURRED) === */}
         <View
           style={[
@@ -1617,10 +1837,10 @@ export default function App() {
               { id: "feed", icon: "home", label: "Mural" },
               { id: "calendario", icon: "calendar", label: "Agenda" },
               { id: "atas", icon: "book-open", label: "Atas" },
-              // Injeta o botão de aprovação automaticamente e com a mesma formatação se for síndico
               ...(user === "sindico"
                 ? [{ id: "aprovacoes", icon: "user-check", label: "Aprovar" }]
                 : []),
+              { id: "configuracoes", icon: "sliders", label: "Ajustes" }, // <--- NOVO BOTÃO AQUI
             ].map((tab) => (
               <TouchableOpacity
                 key={tab.id}
@@ -1832,7 +2052,11 @@ export default function App() {
               />
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6, opacity: salvandoSugestao ? 0.6 : 1 }}
+                  style={{
+                    flex: 1,
+                    marginRight: 6,
+                    opacity: salvandoSugestao ? 0.6 : 1,
+                  }}
                   disabled={salvandoSugestao}
                   onPress={enviarSugestao}
                 >
@@ -1968,7 +2192,11 @@ export default function App() {
 
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6, opacity: publicandoCom ? 0.6 : 1 }}
+                  style={{
+                    flex: 1,
+                    marginRight: 6,
+                    opacity: publicandoCom ? 0.6 : 1,
+                  }}
                   disabled={publicandoCom}
                   onPress={criarComunicado}
                 >
@@ -2078,7 +2306,11 @@ export default function App() {
 
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6, opacity: salvandoAta ? 0.6 : 1 }}
+                  style={{
+                    flex: 1,
+                    marginRight: 6,
+                    opacity: salvandoAta ? 0.6 : 1,
+                  }}
                   disabled={salvandoAta}
                   onPress={salvarAta}
                 >
@@ -2470,7 +2702,11 @@ export default function App() {
 
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6, opacity: salvandoReserva ? 0.6 : 1 }}
+                  style={{
+                    flex: 1,
+                    marginRight: 6,
+                    opacity: salvandoReserva ? 0.6 : 1,
+                  }}
                   disabled={salvandoReserva}
                   onPress={solicitarReserva}
                 >
