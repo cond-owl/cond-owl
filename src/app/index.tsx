@@ -1,32 +1,42 @@
-import React, { useState, useEffect } from "react";
+import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Session } from "@supabase/supabase-js";
+import { BlurView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  StyleSheet,
-  Text,
-  View,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
+  LayoutAnimation,
   Linking,
   Modal,
+  ScrollView,
   StatusBar,
-  UIManager,
-  LayoutAnimation,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
   useWindowDimensions,
 } from "react-native";
 import {
   SafeAreaView,
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
-import { Ionicons, Feather, MaterialCommunityIcons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
-import { BlurView } from "expo-blur";
-import { Session } from "@supabase/supabase-js";
-import { supabase } from "../supabase"; // Ajuste o caminho se necessário
 import { Auth } from "../Auth"; // Ajuste o caminho se necessário
 import { DateTimeField } from "../components/date-time-field";
 import { ModalOverlay } from "../components/modal-overlay";
-import { avisar } from "../utils/avisar";
+import { supabase } from "../supabase"; // Ajuste o caminho se necessário
+import {
+  DIAS_SEMANA,
+  MESES,
+  chaveData,
+  chaveDe,
+  dataDaChave,
+  diasNoMes,
+  formatarDataLonga,
+  formatarHora,
+  horaParaData,
+  inicioDoDia,
+} from "../utils/calendario";
 import {
   definirTipoDoLogin,
   lerCodigoSalvo,
@@ -47,18 +57,6 @@ import {
   type Evento,
   type Sugestao,
 } from "../utils/dadosCondominio";
-import {
-  MESES,
-  DIAS_SEMANA,
-  chaveDe,
-  chaveData,
-  dataDaChave,
-  inicioDoDia,
-  diasNoMes,
-  formatarDataLonga,
-  formatarHora,
-  horaParaData,
-} from "../utils/calendario";
 
 // --- INTERFACES ---
 interface Comunicado {
@@ -73,6 +71,20 @@ interface Comunicado {
 const ORIENTACOES: ("portrait" | "landscape")[] = ["portrait", "landscape"];
 
 export default function App() {
+  // ==========================================
+  // --- ESTADO DO MODAL GLOBAL DE ALERTA ---
+  // ==========================================
+  const [alerta, setAlerta] = useState({
+    visivel: false,
+    titulo: "",
+    mensagem: "",
+  });
+
+  const mostrarAlerta = (titulo: string, mensagem: string) => {
+    setAlerta({ visivel: true, titulo, mensagem });
+  };
+  // ==========================================
+
   // --- SISTEMA DE AUTENTICAÇÃO ---
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<string | null>(null);
@@ -279,11 +291,11 @@ export default function App() {
     });
 
     if (error) {
-      avisar("Erro", "Não foi possível aprovar o morador.");
+      mostrarAlerta("Erro", "Não foi possível aprovar o morador.");
     } else {
       // Remove da tela imediatamente se der sucesso no banco
       setMoradoresPendentes((prev) => prev.filter((m) => m.id !== id));
-      avisar("Sucesso", "O acesso do morador foi libertado!");
+      mostrarAlerta("Sucesso", "O acesso do morador foi libertado!");
     }
   };
 
@@ -291,7 +303,7 @@ export default function App() {
   const fazerLogout = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) {
-      avisar("Erro ao sair", error.message);
+      mostrarAlerta("Erro ao sair", error.message);
     }
     // Não precisa de fazer mais nada, o useEffect deteta a saída e mostra o Auth.tsx novo!
   };
@@ -304,7 +316,9 @@ export default function App() {
   const carregarComunicados = async (): Promise<Comunicado[] | null> => {
     const { data, error } = await supabase
       .from("comunicados")
-      .select("id, tipo, titulo, texto, created_at, comunicados_vistos(user_id)")
+      .select(
+        "id, tipo, titulo, texto, created_at, comunicados_vistos(user_id)",
+      )
       .order("created_at", { ascending: false });
     if (error) return null;
     return (data ?? []).map((c: any) => ({
@@ -320,7 +334,9 @@ export default function App() {
   };
 
   const aplicarComunicados = (lista: Comunicado[] | null) => {
-    setErroComunicados(lista ? "" : "Não foi possível carregar os comunicados.");
+    setErroComunicados(
+      lista ? "" : "Não foi possível carregar os comunicados.",
+    );
     if (lista) setComunicados(lista);
   };
 
@@ -442,12 +458,12 @@ export default function App() {
       !novaReserva.horaInicio ||
       !novaReserva.horaFim
     ) {
-      return avisar("Atenção", "Selecione o espaço e os horários.");
+      return mostrarAlerta("Atenção", "Selecione o espaço e os horários.");
     }
 
     const chaveReserva = chaveData(dataReserva);
     if (chaveReserva < hojeChave) {
-      return avisar(
+      return mostrarAlerta(
         "Atenção",
         "Não é possível reservar em uma data que já passou.",
       );
@@ -462,7 +478,7 @@ export default function App() {
     const endMins = timeToMins(novaReserva.horaFim);
 
     if (startMins >= endMins) {
-      return avisar(
+      return mostrarAlerta(
         "Atenção",
         "A hora final deve ser maior que a hora inicial.",
       );
@@ -471,7 +487,7 @@ export default function App() {
     if (chaveReserva === hojeChave) {
       const agora = new Date();
       if (startMins <= agora.getHours() * 60 + agora.getMinutes()) {
-        return avisar(
+        return mostrarAlerta(
           "Atenção",
           "A hora inicial de uma reserva para hoje deve ser futura.",
         );
@@ -496,7 +512,7 @@ export default function App() {
     });
 
     if (temConflito) {
-      return avisar(
+      return mostrarAlerta(
         "Indisponível",
         "Este espaço já está reservado para este horário neste dia.",
       );
@@ -516,7 +532,7 @@ export default function App() {
     aplicarEventos(await carregarEventos());
     setSalvandoReserva(false);
     if (erro) {
-      return avisar("Não foi possível reservar", erro);
+      return mostrarAlerta("Não foi possível reservar", erro);
     }
 
     // Leva o calendário para o mês da reserva, para o usuário ver o que marcou.
@@ -527,7 +543,7 @@ export default function App() {
     setShowNovaReserva(false);
     setNovaReserva({ titulo: "", detalhes: "", horaInicio: "", horaFim: "" });
     setDataReserva(new Date());
-    avisar("Sucesso", "A sua reserva foi efetuada!");
+    mostrarAlerta("Sucesso", "A sua reserva foi efetuada!");
   };
 
   const [novoCom, setNovoCom] = useState({
@@ -553,7 +569,7 @@ export default function App() {
     if (newCount === 7) {
       animate();
       setShowAdmin(true);
-      avisar("Modo Desenvolvedor", "Painel de administração ativado.");
+      mostrarAlerta("Modo Desenvolvedor", "Painel de administração ativado.");
     }
   };
 
@@ -565,7 +581,7 @@ export default function App() {
       .insert({ comunicado_id: id });
     // 23505 = já estava marcado como visto: o estado local só acompanha.
     if (error && error.code !== "23505") {
-      avisar("Erro", "Não foi possível marcar como visto.");
+      mostrarAlerta("Erro", "Não foi possível marcar como visto.");
       return;
     }
     animate();
@@ -613,7 +629,7 @@ export default function App() {
     const erro = await criarSugestao(novaSugestaoTexto);
     if (erro) {
       setSalvandoSugestao(false);
-      return avisar("Erro", erro);
+      return mostrarAlerta("Erro", erro);
     }
     aplicarSugestoes(await carregarSugestoes());
     setSalvandoSugestao(false);
@@ -626,12 +642,15 @@ export default function App() {
     if (id === null || salvandoSugestao) return;
     if (acao !== "aprovada" && acao !== "arquivada") return;
     if (acao === "arquivada" && !motivoArquivamento.trim())
-      return avisar("Atenção", "É obrigatório justificar o arquivamento.");
+      return mostrarAlerta(
+        "Atenção",
+        "É obrigatório justificar o arquivamento.",
+      );
     setSalvandoSugestao(true);
     const erro = await avaliarSugestaoNoBanco(id, acao, motivoArquivamento);
     if (erro) {
       setSalvandoSugestao(false);
-      return avisar("Erro", erro);
+      return mostrarAlerta("Erro", erro);
     }
     aplicarSugestoes(await carregarSugestoes());
     setSalvandoSugestao(false);
@@ -679,7 +698,7 @@ export default function App() {
   const abrirLinkAta = (link: string) => {
     if (!ehLinkAta(link)) return;
     Linking.openURL(link).catch(() =>
-      avisar("Erro", "Não foi possível abrir o arquivo."),
+      mostrarAlerta("Erro", "Não foi possível abrir o arquivo."),
     );
   };
 
@@ -1676,8 +1695,62 @@ export default function App() {
         </View>
 
         {/* ========================================== */}
-        {/* MODAIS COM BLUR (GLASSMORPHISM)            */}
+        {/* MODAIS COM BLUR (GLASSMORPHISM) E ALERTA GLOBAL */}
         {/* ========================================== */}
+
+        {/* 👇 MODAL DE ALERTA CUSTOMIZADO (INSERIDO AQUI) 👇 */}
+        <Modal
+          transparent={true}
+          visible={alerta.visivel}
+          animationType="fade"
+          onRequestClose={() =>
+            setAlerta((prev) => ({ ...prev, visivel: false }))
+          }
+        >
+          <View style={styles.modalOverlay}>
+            <View
+              style={[
+                styles.modalCaixa,
+                { backgroundColor: theme.card, borderColor: theme.border },
+              ]}
+            >
+              <MaterialCommunityIcons
+                name={
+                  alerta.titulo.toLowerCase().includes("sucesso")
+                    ? "check-circle-outline"
+                    : "alert-circle-outline"
+                }
+                size={56}
+                color={
+                  alerta.titulo.toLowerCase().includes("sucesso")
+                    ? theme.success
+                    : theme.primary[0]
+                }
+                style={{ marginBottom: 16 }}
+              />
+
+              <Text style={[styles.modalTitulo, { color: theme.text }]}>
+                {alerta.titulo}
+              </Text>
+
+              <Text style={[styles.modalMensagem, { color: theme.textMuted }]}>
+                {alerta.mensagem}
+              </Text>
+
+              <TouchableOpacity
+                style={[
+                  styles.modalBotao,
+                  { backgroundColor: theme.primary[0] },
+                ]}
+                onPress={() =>
+                  setAlerta((prev) => ({ ...prev, visivel: false }))
+                }
+              >
+                <Text style={styles.modalBotaoTexto}>Entendi</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
 
         {/* Modal: Detalhes do Calendário */}
         <Modal
@@ -1832,7 +1905,11 @@ export default function App() {
               />
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6, opacity: salvandoSugestao ? 0.6 : 1 }}
+                  style={{
+                    flex: 1,
+                    marginRight: 6,
+                    opacity: salvandoSugestao ? 0.6 : 1,
+                  }}
                   disabled={salvandoSugestao}
                   onPress={enviarSugestao}
                 >
@@ -1968,7 +2045,11 @@ export default function App() {
 
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6, opacity: publicandoCom ? 0.6 : 1 }}
+                  style={{
+                    flex: 1,
+                    marginRight: 6,
+                    opacity: publicandoCom ? 0.6 : 1,
+                  }}
                   disabled={publicandoCom}
                   onPress={criarComunicado}
                 >
@@ -2078,7 +2159,11 @@ export default function App() {
 
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6, opacity: salvandoAta ? 0.6 : 1 }}
+                  style={{
+                    flex: 1,
+                    marginRight: 6,
+                    opacity: salvandoAta ? 0.6 : 1,
+                  }}
                   disabled={salvandoAta}
                   onPress={salvarAta}
                 >
@@ -2470,7 +2555,11 @@ export default function App() {
 
               <View style={styles.row}>
                 <TouchableOpacity
-                  style={{ flex: 1, marginRight: 6, opacity: salvandoReserva ? 0.6 : 1 }}
+                  style={{
+                    flex: 1,
+                    marginRight: 6,
+                    opacity: salvandoReserva ? 0.6 : 1,
+                  }}
                   disabled={salvandoReserva}
                   onPress={solicitarReserva}
                 >
@@ -2698,5 +2787,56 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 30,
     elevation: 15,
+  },
+
+  // === ESTILOS DO MODAL DE ALERTA ===
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  modalCaixa: {
+    backgroundColor: "#1e293b",
+    borderRadius: 20,
+    padding: 24,
+    width: "100%",
+    maxWidth: 340,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#334155",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 8,
+  },
+  modalTitulo: {
+    fontSize: 22,
+    fontWeight: "bold",
+    color: "#f8fafc",
+    marginBottom: 12,
+    textAlign: "center",
+  },
+  modalMensagem: {
+    fontSize: 15,
+    color: "#cbd5e1",
+    textAlign: "center",
+    marginBottom: 28,
+    lineHeight: 22,
+  },
+  modalBotao: {
+    backgroundColor: "#6366f1",
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    width: "100%",
+    alignItems: "center",
+  },
+  modalBotaoTexto: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
   },
 });
