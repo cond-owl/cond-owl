@@ -6,6 +6,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   LayoutAnimation,
   Linking,
   Modal,
@@ -916,7 +917,11 @@ export default function App() {
             activeOpacity={1}
             style={styles.row}
           >
-            <MaterialCommunityIcons name="owl" size={32} color="#818cf8" />
+            <Image
+              source={require("../../assets/images/altadef1024.png")}
+              style={{ width: 36, height: 36 }}
+              resizeMode="contain"
+            />
             <Text
               style={[styles.headerTitle, { color: theme.text, marginLeft: 8 }]}
             >

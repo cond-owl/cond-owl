@@ -2,6 +2,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -441,11 +442,10 @@ export function Auth({
             padding: espacamento,
           }}
         >
-          <MaterialCommunityIcons
-            name="owl"
-            size={compacto ? 60 : 80}
-            color="#818cf8"
-            style={{ marginBottom: 12 }}
+          <Image
+            source={require("../assets/images/altadef1024.png")}
+            style={{ width: 36, height: 36 }}
+            resizeMode="contain"
           />
 
           <Text
@@ -562,11 +562,14 @@ export function Auth({
           <View
             style={[styles.logoContainer, compacto && { marginBottom: 16 }]}
           >
-            <MaterialCommunityIcons
-              name="owl"
-              size={compacto ? 40 : 54}
-              color="#818cf8"
-              style={{ marginRight: 8 }}
+            <Image
+              source={require("../assets/images/altadef1024.png")}
+              style={{
+                width: compacto ? 40 : 54,
+                height: compacto ? 40 : 54,
+                marginRight: 8,
+              }}
+              resizeMode="contain"
             />
             <Text style={[styles.logo, compacto && { fontSize: 34 }]}>
               Condo<Text style={{ color: "#818cf8" }}>Owl</Text>
