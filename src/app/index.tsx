@@ -1,3 +1,4 @@
+import { solicitarPermissaoNotificacao } from "@/utils/notificacoes";
 import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Session } from "@supabase/supabase-js";
 import { BlurView } from "expo-blur";
@@ -11,6 +12,7 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -71,6 +73,8 @@ interface Comunicado {
 const ORIENTACOES: ("portrait" | "landscape")[] = ["portrait", "landscape"];
 
 export default function App() {
+  // 👇 COLE TUDO ISTO EXATAMENTE AQUI 👇
+
   // ==========================================
   // --- ESTADO DO MODAL GLOBAL DE ALERTA ---
   // ==========================================
@@ -83,6 +87,53 @@ export default function App() {
   const mostrarAlerta = (titulo: string, mensagem: string) => {
     setAlerta({ visivel: true, titulo, mensagem });
   };
+
+  // ==========================================
+  // --- PREFERÊNCIAS DE NOTIFICAÇÃO ---
+  // ==========================================
+  const [prefsNotificacoes, setPrefsNotificacoes] = useState({
+    manutencao: true,
+    social: true,
+  });
+
+  const carregarPreferencias = async (uid: string) => {
+    const { data } = await supabase
+      .from("perfis")
+      .select("notifica_manutencao, notifica_social")
+      .eq("id", uid)
+      .single();
+
+    if (data) {
+      setPrefsNotificacoes({
+        manutencao: data.notifica_manutencao ?? true,
+        social: data.notifica_social ?? true,
+      });
+    }
+  };
+
+  const alternarPreferencia = async (
+    chave: "manutencao" | "social",
+    valor: boolean,
+  ) => {
+    setPrefsNotificacoes((prev) => ({ ...prev, [chave]: valor }));
+
+    const coluna =
+      chave === "manutencao" ? "notifica_manutencao" : "notifica_social";
+    const { error } = await supabase
+      .from("perfis")
+      .update({ [coluna]: valor })
+      // Utilizamos auth.uid() indiretamente através da sessão
+      .eq("id", session?.user?.id);
+
+    if (error) {
+      mostrarAlerta("Erro", "Não foi possível guardar a sua preferência.");
+      setPrefsNotificacoes((prev) => ({ ...prev, [chave]: !valor }));
+    }
+  };
+  // 👆 ATÉ AQUI 👆
+
+  // --- SISTEMA DE AUTENTICAÇÃO ---
+  // (Abaixo disto o seu código normal continua com: const [session, setSession]...)
   // ==========================================
 
   // --- SISTEMA DE AUTENTICAÇÃO ---
@@ -339,12 +390,17 @@ export default function App() {
     );
     if (lista) setComunicados(lista);
   };
-
   // Carrega quando há sessão liberada (morador pendente não passa do RLS).
   const uidLogado = session?.user.id;
+
   useEffect(() => {
     if (!uidLogado || isPending) return;
+
     carregarComunicados().then(aplicarComunicados);
+
+    // Pede a permissão e guarda o Token assim que o mural abre
+    solicitarPermissaoNotificacao(uidLogado);
+    carregarPreferencias(uidLogado);
   }, [uidLogado, isPending]);
 
   // Eventos/reservas, atas e sugestões vêm do banco (tabelas eventos, atas e sugestoes;
@@ -1610,7 +1666,179 @@ export default function App() {
               )}
             </View>
           )}
+          {/* === ABA: CONFIGURAÇÕES === */}
+          {activeTab === "configuracoes" && (
+            <View
+              style={{
+                flex: 1,
+                paddingTop: 20,
+                paddingBottom: 100,
+                paddingHorizontal: 4,
+              }}
+            >
+              <Text
+                style={[
+                  styles.pageTitle,
+                  { color: theme.text, marginBottom: 20 },
+                ]}
+              >
+                Configurações
+              </Text>
+
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  fontSize: 14,
+                  fontWeight: "bold",
+                  textTransform: "uppercase",
+                  marginBottom: 12,
+                  marginLeft: 4,
+                }}
+              >
+                Notificações Push
+              </Text>
+
+              <View
+                style={[
+                  styles.card,
+                  {
+                    backgroundColor: theme.card,
+                    borderColor: theme.border,
+                    padding: 16,
+                  },
+                ]}
+              >
+                <Text
+                  style={{
+                    color: theme.textMuted,
+                    fontSize: 13,
+                    marginBottom: 16,
+                    lineHeight: 20,
+                  }}
+                >
+                  Escolha os tipos de comunicados opcionais que deseja receber
+                  no seu telemóvel. Avisos urgentes e de reuniões são sempre
+                  enviados.
+                </Text>
+
+                {/* Switch Manutenção */}
+                <View
+                  style={[
+                    styles.rowBetween,
+                    {
+                      marginBottom: 16,
+                      borderBottomWidth: 1,
+                      borderBottomColor: theme.border,
+                      paddingBottom: 16,
+                    },
+                  ]}
+                >
+                  <View style={styles.row}>
+                    <View
+                      style={[
+                        styles.tag,
+                        {
+                          backgroundColor: theme.warning + "1A",
+                          marginRight: 12,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name="build-outline"
+                        size={16}
+                        color={theme.warning}
+                      />
+                    </View>
+                    <View>
+                      <Text
+                        style={{
+                          color: theme.text,
+                          fontSize: 16,
+                          fontWeight: "bold",
+                        }}
+                      >
+                        Manutenção
+                      </Text>
+                      <Text
+                        style={{
+                          color: theme.textMuted,
+                          fontSize: 12,
+                          marginTop: 2,
+                        }}
+                      >
+                        Obras, limpeza e reparações
+                      </Text>
+                    </View>
+                  </View>
+                  <Switch
+                    trackColor={{
+                      false: theme.border,
+                      true: theme.primary[0],
+                    }}
+                    thumbColor={"#FFF"}
+                    onValueChange={(valor) =>
+                      alternarPreferencia("manutencao", valor)
+                    }
+                    value={prefsNotificacoes.manutencao}
+                  />
+                </View>
+
+                {/* Switch Social */}
+                <View style={styles.rowBetween}>
+                  <View style={styles.row}>
+                    <View
+                      style={[
+                        styles.tag,
+                        {
+                          backgroundColor: theme.success + "1A",
+                          marginRight: 12,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name="cafe-outline"
+                        size={16}
+                        color={theme.success}
+                      />
+                    </View>
+                    <View>
+                      <Text
+                        style={{
+                          color: theme.text,
+                          fontSize: 16,
+                          fontWeight: "bold",
+                        }}
+                      >
+                        Social
+                      </Text>
+                      <Text
+                        style={{
+                          color: theme.textMuted,
+                          fontSize: 12,
+                          marginTop: 2,
+                        }}
+                      >
+                        Eventos e confraternizações
+                      </Text>
+                    </View>
+                  </View>
+                  <Switch
+                    trackColor={{
+                      false: theme.border,
+                      true: theme.primary[0],
+                    }}
+                    thumbColor={"#FFF"}
+                    onValueChange={(valor) =>
+                      alternarPreferencia("social", valor)
+                    }
+                    value={prefsNotificacoes.social}
+                  />
+                </View>
+              </View>
+            </View>
+          )}
         </ScrollView>
+
         {/* === BOTTOM TAB BAR (FLOATING & BLURRED) === */}
         <View
           style={[
@@ -1636,10 +1864,10 @@ export default function App() {
               { id: "feed", icon: "home", label: "Mural" },
               { id: "calendario", icon: "calendar", label: "Agenda" },
               { id: "atas", icon: "book-open", label: "Atas" },
-              // Injeta o botão de aprovação automaticamente e com a mesma formatação se for síndico
               ...(user === "sindico"
                 ? [{ id: "aprovacoes", icon: "user-check", label: "Aprovar" }]
                 : []),
+              { id: "configuracoes", icon: "sliders", label: "Ajustes" }, // <--- NOVO BOTÃO AQUI
             ].map((tab) => (
               <TouchableOpacity
                 key={tab.id}
@@ -1770,7 +1998,11 @@ export default function App() {
               <Text
                 style={[
                   styles.pageTitle,
-                  { color: theme.text, textAlign: "center", marginBottom: 20 },
+                  {
+                    color: theme.text,
+                    textAlign: "center",
+                    marginBottom: 20,
+                  },
                 ]}
               >
                 {selectedDate ? formatarDataLonga(selectedDate) : ""}
@@ -1782,7 +2014,10 @@ export default function App() {
                     key={idx}
                     style={[
                       styles.eventDetailBox,
-                      { backgroundColor: theme.bg, borderColor: theme.border },
+                      {
+                        backgroundColor: theme.bg,
+                        borderColor: theme.border,
+                      },
                     ]}
                   >
                     <View style={styles.row}>
