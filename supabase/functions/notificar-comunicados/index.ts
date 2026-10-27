@@ -23,8 +23,10 @@ serve(async (req) => {
 
     if (!comunicado) throw new Error("Nenhum dado recebido do banco.");
 
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+
     const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
+      supabaseUrl,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
@@ -50,12 +52,13 @@ serve(async (req) => {
         title: `[${comunicado.tipo}] ${comunicado.titulo}`,
         body: comunicado.texto,
       },
-      // --- CÓDIGO NOVO: Configuração para PWA/Web ---
+      // --- Configuração para PWA/Web ---
       webpush: {
         notification: {
-          // Coloque aqui o link direto (URL pública) da sua imagem da coruja.
-          // Como está a rodar localmente, use um link de imagem externo para testar agora.
-          icon: "https://wdwskyglrcdmhgvkxpmv.supabase.co/storage/v1/object/public/assets/condoowl_1mb.jpg", 
+          // Ícone público no bucket de assets do próprio projeto Supabase.
+          // Derivado de SUPABASE_URL (injetado pela Supabase na função),
+          // sem URL fixa no código.
+          icon: `${supabaseUrl}/storage/v1/object/public/assets/condoowl_1mb.jpg`,
         }
       },
       // ----------------------------------------------
