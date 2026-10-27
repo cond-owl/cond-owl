@@ -29,6 +29,9 @@ import {
 const SENHA_MIN = 8;
 const EMAIL_VALIDO = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
+// Telas do card de login/cadastro (a barreira de código do condomínio vem antes).
+type TelaAuth = "login" | "cadastro" | "esqueci" | "recuperar" | "confirmar_otp";
+
 // `conferindo`: o index.tsx está conferindo no servidor o condomínio de um login recém-feito.
 // `erroAcesso`: motivo da recusa dessa conferência, mostrado no card de login (e limpo por
 // `aoLimparErroAcesso` assim que a pessoa mexe nos campos).
@@ -130,9 +133,7 @@ export function Auth({
   };
 
   // --- ESTADOS DO LOGIN ORIGINAL ---
-  const [view, setView] = useState<
-    "login" | "cadastro" | "esqueci" | "recuperar" | "confirmar_otp"
-  >("login");
+  const [view, setView] = useState<TelaAuth>("login");
   const [tipoUsuario, setTipoUsuario] = useState<"morador" | "sindico">(
     "morador",
   );
@@ -196,7 +197,7 @@ export function Auth({
     setUnidade("Apto: " + apenasNumeros);
   };
 
-  const mudarTela = (novaTela: any) => {
+  const mudarTela = (novaTela: TelaAuth) => {
     setView(novaTela);
     limparErroLogin();
     setEmail("");

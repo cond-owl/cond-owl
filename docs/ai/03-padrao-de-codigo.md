@@ -56,8 +56,48 @@ parecer com o que já existe.**
 - Alertas **sempre** por `utils/avisar.ts` (funciona nativo e web) — nunca
   `Alert.alert` direto nem `window.alert`.
 - Datas e meses **sempre** por `utils/calendario.ts` (`chaveData`,
-  `formatarDataLonga`, `DIAS_SEMANA`, `MESES`). Nunca recalcular na mão,
-  nunca usar `toLocaleDateString` solto.
+  `formatarDataLonga`, `formatarDataCurta`, `DIAS_SEMANA`, `MESES`). Nunca
+  recalcular na mão, nunca usar `toLocaleDateString` solto.
+
+## Datas e horas (regra dura)
+
+Data é regra de negócio: erra o dia e a reserva/ata cai no mês errado sem
+ninguém perceber. Por isso:
+
+- **Todo cálculo e toda formatação de data/hora passa por
+  `src/utils/calendario.ts`.** Se falta um formato, cria-se a função lá.
+- **Proibido `toISOString` para data de negócio.** Ele converte para UTC: no
+  Brasil, depois das 21h, grava o dia seguinte. Para a chave `AAAA-MM-DD`
+  use `chaveData(data)` / `chaveDe(ano, mes, dia)`.
+- **Proibidos `toLocaleDateString` e `toLocaleTimeString`** no código (o
+  ESLint bloqueia): o formato depende da plataforma e foge do padrão do app.
+  Use `formatarDataCurta` (DD/MM/AAAA), `formatarDataLonga` (1 de Outubro de
+  2026) ou `formatarHora` (HH:mm).
+- Timestamp do banco (`created_at`) vira data com
+  `formatarDataCurta(chaveData(new Date(iso)))`.
+
+## Tipagem (o gate automatizado)
+
+`npx tsc --noEmit` é o único verificador automático do projeto, então a
+tipagem é levada a sério:
+
+- **Proibido `any`** — o ESLint falha (`@typescript-eslint/no-explicit-any`).
+  A linha do banco ganha uma interface local e explícita antes de ser usada
+  (ex.: `ComunicadoRow`, `EventoRow`, `MoradorPendente`).
+- **Proibido `as any`** para "resolver" o `tsc`. Se um valor dinâmico precisa
+  de tipo mais largo, tipar o dado na origem (ex.: `keyof typeof
+  Feather.glyphMap` para nome de ícone).
+- `as` com tipo explícito é aceitável em literal de configuração quando o
+  TypeScript não consegue manter o literal (ex.: lista de abas).
+
+## Logs
+
+- **Proibido `console.*` no `src/`** — o ESLint falha (`no-console`). Erro
+  de operação vai para a tela via `avisar.ts`/`mostrarAlerta`, com mensagem
+  em português.
+- **Nunca logar objeto vindo do banco** (erro do Supabase pode carregar
+  dados pessoais de morador). Depuração local usa `console` temporário e sai
+  antes de entregar.
 
 ## Dados (padrão de retorno do `utils/dadosCondominio.ts`)
 
@@ -100,4 +140,12 @@ Padrão rígido, mantenha:
   não número mágico de layout.
 - `.env` nunca entra no git (`.gitignore` já cobre); nunca usar a
   `service_role` no app, nem de exemplo copiável.
-- Nunca usar `process.env` fora de `src/supabase.ts` sem justificar.
+- **Leitura de `.env` só em módulo de configuração** (`src/supabase.ts`,
+  `src/utils/notificacoes.ts`). Tela e componente não leem `process.env`
+  diretamente.
+- **Segredo que não pode ser público não existe no cliente.** A chave
+  `anon` e a config web do Firebase são públicas por desenho; para qualquer
+  outra credencial, a resposta é banco (função/gatilho/RLS), não `.env`.
+- Gates: `node scripts/verificar.mjs` barra literal com cara de credencial e
+  variável `EXPO_PUBLIC_*` usada sem linha no `.env.example`. Rode
+  `npm run verificar` antes de entregar.

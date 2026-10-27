@@ -15,9 +15,12 @@ Regras que valem sempre, sem exceção:
   `.env.example` no mesmo commit.
 - **Nada hardcoded por segurança** — chave, token, código, e-mail, URL de
   serviço interno ou ID de tenant jamais ficam no código; vêm do `.env` ou do banco.
-- **Teste end-to-end antes de entregar** — nenhum ajuste é entregue sem
-  percorrer o fluxo real do usuário (dois perfis quando couber, nativo e web
-  quando couber); a resposta final diz o que foi testado.
+- **Datas só por `src/utils/calendario.ts`** — proibido `toISOString`
+  (erro de fuso) e proibido `toLocaleDateString`/`toLocaleTimeString`.
+- **Proibido `any` e `console.*` no `src/`** — o ESLint falha.
+- **Teste end-to-end antes de entregar** — `npm run verificar` (tsc + lint +
+  segredo) e `npm run e2e` (Playwright) verdes; a resposta final diz o que
+  foi testado.
 
 ## Expo has changed — do not trust your training data
 

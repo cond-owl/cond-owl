@@ -26,6 +26,11 @@ achado por achado). Aqui vai o operacional.
    `usuario_pertence_ao_condominio`), nunca por menos que isso no cliente.
 5. **Nunca** usar a `service_role` no app. Nunca.
 6. `console.log` não imprime dados pessoais do usuário.
+7. **Segredo que não pode ser público não existe no cliente.** Não há
+   servidor próprio: credencial sensível vira função/gatilho/RLS no banco.
+   `.env` só carrega valores públicos por desenho (URL e anon key do
+   Supabase, config web do Firebase) — e mesmo esses sempre via
+   `process.env.EXPO_PUBLIC_*`, com exemplo no `.env.example`.
 
 ## Padrões de esquema (o que já está estabelecido)
 
@@ -48,6 +53,7 @@ achado por achado). Aqui vai o operacional.
 - [ ] `LIMITE` no app atualizado se algum CHECK mudou.
 - [ ] Nada de segredo/credencial/URL interna hardcoded
       (tudo por `.env` + `.env.example`, ou pelo banco).
+- [ ] `npm run verificar` passa (segredo, `.env.example`, tipos e lint).
 - [ ] `supabase/docs/mapa-das-tabelas.md` atualizado.
 - [ ] Validado num Postgres descartável com `auth` simulado
       (roteiro no fim do `supabase/README.md`).

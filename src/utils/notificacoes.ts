@@ -1,58 +1,59 @@
-// src/utils/notificacoes.ts
-import { initializeApp } from "firebase/app";
+// Configuração das notificações push (Firebase Cloud Messaging). Os valores do
+// Firebase vêm do .env (EXPO_PUBLIC_FIREBASE_*); nada de credencial ou URL fixa
+// no código. Sem as variáveis, as notificações ficam desativadas e o app segue
+// funcionando normalmente.
+import { initializeApp, type FirebaseOptions } from "firebase/app";
 import { getMessaging, getToken } from "firebase/messaging";
 import { supabase } from "../supabase";
 
-// 1. COLE AQUI O SEU FIREBASE CONFIG (Gerado no Passo 1)
-const firebaseConfig = {
-  apiKey: "AIzaSyAUx9F3aQ4dxXl7zto9xW3YGS8GpaERZNg",
-  authDomain: "condoowl-f9e5a.firebaseapp.com",
-  projectId: "condoowl-f9e5a",
-  storageBucket: "condoowl-f9e5a.firebasestorage.app",
-  messagingSenderId: "558383550095",
-  appId: "1:558383550095:web:a9410035ffcbce519c6afa",
+const configuracao: Pick<
+  FirebaseOptions,
+  | "apiKey"
+  | "authDomain"
+  | "projectId"
+  | "storageBucket"
+  | "messagingSenderId"
+  | "appId"
+> = {
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
 
-// Inicializa o Firebase
-const app = initializeApp(firebaseConfig);
+const vapidKey = process.env.EXPO_PUBLIC_FIREBASE_VAPID_KEY;
 
-// Só inicializa o mensageiro se estiver num navegador que suporte notificações
+const completa = Object.values(configuracao).every(
+  (valor) => typeof valor === "string" && valor.length > 0,
+);
+
+// Só inicializa o mensageiro com a configuração completa e em navegador que
+// suporte notificações (no nativo, o push é tratado por outra via).
 const messaging =
-  typeof window !== "undefined" && "Notification" in window
-    ? getMessaging(app)
+  completa &&
+  typeof window !== "undefined" &&
+  "Notification" in window
+    ? getMessaging(initializeApp(configuracao))
     : null;
 
 export const solicitarPermissaoNotificacao = async (userId: string) => {
-  if (!messaging) return;
+  if (!messaging || !vapidKey) return;
 
   try {
-    // Abre aquele pop-up nativo do navegador: "Este site deseja enviar notificações (Permitir/Bloquear)"
     const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
 
-    if (permission === "granted") {
-      // Se o utilizador aceitar, pede um Token único ao Firebase
-      const token = await getToken(messaging, {
-        vapidKey:
-          "BDDepkjfgX9zmD_sYtWzYfr1SUbdeLqHXUPORavLEySAs73qijWTB8CDwvRmhljXXL53glsCLCc0sOXcrfjRndI",
-      });
+    // Se o utilizador aceitar, pede um token único ao Firebase e guarda no perfil.
+    const token = await getToken(messaging, { vapidKey });
+    if (!token) return;
 
-      if (token) {
-        // Guarda o token na tabela perfis do Supabase associado a este utilizador
-        const { error } = await supabase
-          .from("perfis")
-          .update({ fcm_token: token })
-          .eq("id", userId);
-
-        if (error) {
-          console.error("Erro ao guardar token no Supabase:", error);
-        } else {
-          console.log("Notificações ativadas! Token guardado com sucesso.");
-        }
-      }
-    } else {
-      console.log("O utilizador recusou as notificações.");
-    }
-  } catch (error) {
-    console.error("Erro ao configurar notificações:", error);
+    await supabase
+      .from("perfis")
+      .update({ fcm_token: token })
+      .eq("id", userId);
+  } catch {
+    // Falha ao registrar notificações não impede o uso do app.
   }
 };
