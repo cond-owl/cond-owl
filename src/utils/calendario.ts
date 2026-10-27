@@ -40,6 +40,12 @@ export const formatarDataLonga = (chave: string) => {
   return `${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()}`;
 };
 
+// Chave AAAA-MM-DD -> "DD/MM/AAAA" (o formato curto usado em listas e cartões).
+export const formatarDataCurta = (chave: string) => {
+  const d = dataDaChave(chave);
+  return `${doisDigitos(d.getDate())}/${doisDigitos(d.getMonth() + 1)}/${d.getFullYear()}`;
+};
+
 export const formatarHora = (d: Date) =>
   `${doisDigitos(d.getHours())}:${doisDigitos(d.getMinutes())}`;
 

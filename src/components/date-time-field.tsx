@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { StyleSheet, Text, TouchableOpacity } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { formatarHora } from "../utils/calendario";
+import { formatarDataCurta, formatarHora, chaveData } from "../utils/calendario";
 import type { DateTimeFieldProps } from "./date-time-field.types";
 
 // Versão nativa (iOS/Android). A versão web fica em date-time-field.web.tsx,
@@ -20,7 +20,7 @@ export function DateTimeField({
 
   const texto = value
     ? mode === "date"
-      ? value.toLocaleDateString("pt-BR")
+      ? formatarDataCurta(chaveData(value))
       : formatarHora(value)
     : placeholder;
 

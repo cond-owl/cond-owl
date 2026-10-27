@@ -30,6 +30,16 @@ export interface Sugestao {
   motivo: string;
 }
 
+// Linha da tabela `eventos` como o PostgREST devolve (snake_case).
+interface EventoRow {
+  data: string;
+  tipo: string;
+  titulo: string;
+  detalhes: string;
+  hora_inicio: string | null;
+  hora_fim: string | null;
+}
+
 // Limites das colunas (iguais aos CHECK das migrações); o app usa em maxLength.
 export const LIMITE = {
   detalhes: 2000,
@@ -69,7 +79,7 @@ export const carregarEventos = async (): Promise<Evento[] | null> => {
     .order("data")
     .order("hora_inicio");
   if (error) return null;
-  return (data ?? []).map((e: any) => {
+  return (data ?? []).map((e: EventoRow) => {
     const horaInicio = hhmm(e.hora_inicio);
     const horaFim = hhmm(e.hora_fim);
     const horario = horaInicio && horaFim ? `Horário: ${horaInicio} às ${horaFim}` : "";

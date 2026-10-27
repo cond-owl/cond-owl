@@ -35,6 +35,7 @@ import {
   chaveDe,
   dataDaChave,
   diasNoMes,
+  formatarDataCurta,
   formatarDataLonga,
   formatarHora,
   horaParaData,
@@ -61,6 +62,16 @@ import {
   type Sugestao,
 } from "../utils/dadosCondominio";
 
+// Linha da tabela `comunicados` como o PostgREST devolve (snake_case).
+interface ComunicadoRow {
+  id: number;
+  tipo: string;
+  titulo: string;
+  texto: string;
+  created_at: string;
+  comunicados_vistos: { user_id: string }[] | null;
+}
+
 // --- INTERFACES ---
 interface Comunicado {
   id: number;
@@ -73,12 +84,17 @@ interface Comunicado {
 
 const ORIENTACOES: ("portrait" | "landscape")[] = ["portrait", "landscape"];
 
-export default function App() {
-  // 👇 COLE TUDO ISTO EXATAMENTE AQUI 👇
+// Linha devolvida pela RPC get_moradores_pendentes (perfil do morador aguardando aprovação).
+interface MoradorPendente {
+  id: string;
+  nome_completo: string | null;
+  email: string | null;
+  unidade: string | null;
+  data_nascimento: string | null;
+}
 
-  // ==========================================
+export default function App() {
   // --- ESTADO DO MODAL GLOBAL DE ALERTA ---
-  // ==========================================
   const [alerta, setAlerta] = useState({
     visivel: false,
     titulo: "",
@@ -131,11 +147,6 @@ export default function App() {
       setPrefsNotificacoes((prev) => ({ ...prev, [chave]: !valor }));
     }
   };
-  // 👆 ATÉ AQUI 👆
-
-  // --- SISTEMA DE AUTENTICAÇÃO ---
-  // (Abaixo disto o seu código normal continua com: const [session, setSession]...)
-  // ==========================================
 
   // --- SISTEMA DE AUTENTICAÇÃO ---
   const [session, setSession] = useState<Session | null>(null);
@@ -313,7 +324,9 @@ export default function App() {
   }));
 
   // --- ESTADO DA LISTA DE ESPERA (Agora começa vazia) ---
-  const [moradoresPendentes, setMoradoresPendentes] = useState<any[]>([]);
+  const [moradoresPendentes, setMoradoresPendentes] = useState<
+    MoradorPendente[]
+  >([]);
 
   // --- BUSCAR DADOS REAIS DO SUPABASE ---
   const [erroPendentes, setErroPendentes] = useState<string>("");
@@ -373,15 +386,13 @@ export default function App() {
       )
       .order("created_at", { ascending: false });
     if (error) return null;
-    return (data ?? []).map((c: any) => ({
+    return (data ?? []).map((c: ComunicadoRow) => ({
       id: c.id,
       tipo: c.tipo,
       titulo: c.titulo,
       texto: c.texto,
-      data: new Date(c.created_at).toLocaleDateString("pt-BR"),
-      vistoPor: (c.comunicados_vistos ?? []).map(
-        (v: { user_id: string }) => v.user_id,
-      ),
+      data: formatarDataCurta(chaveData(new Date(c.created_at))),
+      vistoPor: (c.comunicados_vistos ?? []).map((v) => v.user_id),
     }));
   };
 
@@ -971,7 +982,6 @@ export default function App() {
           {activeTab === "feed" && (
             <View>
               <View style={styles.pageHeader}>
-                {/* 👇 Bloco novo com o Nome e o Título juntos 👇 */}
                 <View style={{ flex: 1, marginRight: 12 }}>
                   <Text
                     style={{
@@ -980,13 +990,12 @@ export default function App() {
                       marginBottom: 4,
                     }}
                   >
-                    Olá, {nomeUsuario}! 👋
+                    Olá, {nomeUsuario}!
                   </Text>
                   <Text style={[styles.pageTitle, { color: theme.text }]}>
                     Mural de Avisos
                   </Text>
                 </View>
-                {/* 👆 Fim do bloco novo 👆 */}
                 {user === "sindico" && (
                   <TouchableOpacity
                     onPress={() => {
@@ -1865,22 +1874,28 @@ export default function App() {
               { borderColor: theme.border, width: "100%", maxWidth: 560 },
             ]}
           >
-            {[
-              { id: "feed", icon: "home", label: "Mural" },
-              { id: "calendario", icon: "calendar", label: "Agenda" },
-              { id: "atas", icon: "book-open", label: "Atas" },
-              ...(user === "sindico"
-                ? [{ id: "aprovacoes", icon: "user-check", label: "Aprovar" }]
-                : []),
-              { id: "configuracoes", icon: "sliders", label: "Ajustes" }, // <--- NOVO BOTÃO AQUI
-            ].map((tab) => (
+            {(
+              [
+                { id: "feed", icon: "home", label: "Mural" },
+                { id: "calendario", icon: "calendar", label: "Agenda" },
+                { id: "atas", icon: "book-open", label: "Atas" },
+                ...(user === "sindico"
+                  ? [{ id: "aprovacoes", icon: "user-check", label: "Aprovar" }]
+                  : []),
+                { id: "configuracoes", icon: "sliders", label: "Ajustes" },
+              ] as {
+                id: string;
+                icon: keyof typeof Feather.glyphMap;
+                label: string;
+              }[]
+            ).map((tab) => (
               <TouchableOpacity
                 key={tab.id}
                 style={styles.tabItem}
                 onPress={() => changeTab(tab.id)}
               >
                 <Feather
-                  name={tab.icon as any}
+                  name={tab.icon}
                   size={24}
                   color={
                     activeTab === tab.id ? theme.primary[0] : theme.textMuted
@@ -1930,8 +1945,6 @@ export default function App() {
         {/* ========================================== */}
         {/* MODAIS COM BLUR (GLASSMORPHISM) E ALERTA GLOBAL */}
         {/* ========================================== */}
-
-        {/* 👇 MODAL DE ALERTA CUSTOMIZADO (INSERIDO AQUI) 👇 */}
         <Modal
           transparent={true}
           visible={alerta.visivel}

@@ -47,3 +47,7 @@ example
 
 # Credenciais de teste locais (nunca versionar)
 supabase/user_test/
+
+# Playwright (resultados e relatório de teste)
+test-results/
+playwright-report/
