@@ -253,7 +253,7 @@ export function Auth({
         setErroLogin(traduzirErro(error.message));
       }
     } else {
-      // 👇 SUCESSO: Salva a preferência de manter a sessão 👇
+      // Salva a preferência de manter a sessão
       if (typeof window !== "undefined" && window.localStorage) {
         window.localStorage.setItem(
           "@condoowl:manter_conectado",
@@ -576,7 +576,7 @@ export function Auth({
             </Text>
           </View>
 
-          {/* 🟢 BOTÃO DE TROCAR CONDOMÍNIO (ESTILO PÍLULA) 🟢 */}
+          {/* BOTÃO DE TROCAR CONDOMÍNIO (ESTILO PÍLULA) */}
           <TouchableOpacity
             onPress={handleVoltarParaCodigo}
             disabled={ocupado}

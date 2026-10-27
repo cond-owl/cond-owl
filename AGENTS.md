@@ -1,5 +1,24 @@
 This is an Expo/React Native mobile application. Prioritize mobile-first patterns, performance, and cross-platform compatibility.
 
+# Padrões do projeto
+
+Antes de escrever qualquer código, leia os padrões oficiais em
+[`docs/ai/`](docs/ai/README.md) — visão do app, estrutura, padrão de código,
+regras do banco e fluxo de trabalho. Os arquivos dali mandam sobre este resumo.
+
+Regras que valem sempre, sem exceção:
+
+- **Comentário sem emoji** — texto puro; comentário duradouro é docstring
+  (topo de arquivo/módulo/function), no modelo de `src/utils/dadosCondominio.ts`.
+- **Nenhuma variável de ambiente hardcoded** — toda grandeza configurável é
+  lida de `process.env.EXPO_PUBLIC_*` e ganha linha de exemplo no
+  `.env.example` no mesmo commit.
+- **Nada hardcoded por segurança** — chave, token, código, e-mail, URL de
+  serviço interno ou ID de tenant jamais ficam no código; vêm do `.env` ou do banco.
+- **Teste end-to-end antes de entregar** — nenhum ajuste é entregue sem
+  percorrer o fluxo real do usuário (dois perfis quando couber, nativo e web
+  quando couber); a resposta final diz o que foi testado.
+
 ## Expo has changed — do not trust your training data
 
 Expo ships breaking changes every SDK release. APIs you remember are likely renamed, moved, or removed. Before writing any code that touches an Expo, EAS, or React Native API:

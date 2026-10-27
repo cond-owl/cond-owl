@@ -74,11 +74,7 @@ interface Comunicado {
 const ORIENTACOES: ("portrait" | "landscape")[] = ["portrait", "landscape"];
 
 export default function App() {
-  // 👇 COLE TUDO ISTO EXATAMENTE AQUI 👇
-
-  // ==========================================
   // --- ESTADO DO MODAL GLOBAL DE ALERTA ---
-  // ==========================================
   const [alerta, setAlerta] = useState({
     visivel: false,
     titulo: "",
@@ -131,11 +127,6 @@ export default function App() {
       setPrefsNotificacoes((prev) => ({ ...prev, [chave]: !valor }));
     }
   };
-  // 👆 ATÉ AQUI 👆
-
-  // --- SISTEMA DE AUTENTICAÇÃO ---
-  // (Abaixo disto o seu código normal continua com: const [session, setSession]...)
-  // ==========================================
 
   // --- SISTEMA DE AUTENTICAÇÃO ---
   const [session, setSession] = useState<Session | null>(null);
@@ -971,7 +962,6 @@ export default function App() {
           {activeTab === "feed" && (
             <View>
               <View style={styles.pageHeader}>
-                {/* 👇 Bloco novo com o Nome e o Título juntos 👇 */}
                 <View style={{ flex: 1, marginRight: 12 }}>
                   <Text
                     style={{
@@ -980,13 +970,12 @@ export default function App() {
                       marginBottom: 4,
                     }}
                   >
-                    Olá, {nomeUsuario}! 👋
+                    Olá, {nomeUsuario}!
                   </Text>
                   <Text style={[styles.pageTitle, { color: theme.text }]}>
                     Mural de Avisos
                   </Text>
                 </View>
-                {/* 👆 Fim do bloco novo 👆 */}
                 {user === "sindico" && (
                   <TouchableOpacity
                     onPress={() => {
@@ -1930,8 +1919,6 @@ export default function App() {
         {/* ========================================== */}
         {/* MODAIS COM BLUR (GLASSMORPHISM) E ALERTA GLOBAL */}
         {/* ========================================== */}
-
-        {/* 👇 MODAL DE ALERTA CUSTOMIZADO (INSERIDO AQUI) 👇 */}
         <Modal
           transparent={true}
           visible={alerta.visivel}

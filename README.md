@@ -128,6 +128,7 @@ supabase/
 
 ## Para quem mexe no código
 
+- **Padrões oficiais do projeto (para IA e para gente):** [`docs/ai/`](docs/ai/README.md).
 - Documentação do porquê das decisões: `supabase/README.md` (banco e segurança) e
   `src/utils/README.md` (calendário e reservas).
 - Mudança no banco vira uma **migração nova** em `supabase/migrations/`; não se edita uma
