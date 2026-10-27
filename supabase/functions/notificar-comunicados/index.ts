@@ -58,7 +58,7 @@ serve(async (req) => {
           // Ícone público no bucket de assets do próprio projeto Supabase.
           // Derivado de SUPABASE_URL (injetado pela Supabase na função),
           // sem URL fixa no código.
-          icon: `${supabaseUrl}/storage/v1/object/public/assets/condoowl_1mb.jpg`,
+          icon: `${supabaseUrl}/storage/v1/object/public/assets/altadef1024.png`,
         }
       },
       // ----------------------------------------------
