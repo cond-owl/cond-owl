@@ -20,7 +20,7 @@ mindmap
         tipo_usuario_id
       dispositivos_notificacao
         token por instalação
-        plataforma web ou Expo
+        plataforma web
       tipo_usuario
         síndico e morador
       app_secrets
@@ -132,7 +132,7 @@ sequenceDiagram
 | Tabela | Ler | Escrever |
 |--------|-----|----------|
 | `perfis` | o próprio usuário; síndico lê todos | usuário altera nome, celular e preferências de notificação |
-| `dispositivos_notificacao` | o próprio usuário | usuário registra seus tokens web e nativos; síndico não lê tokens |
+| `dispositivos_notificacao` | o próprio usuário | usuário registra tokens das instalações do PWA; síndico não lê tokens |
 | `tipo_usuario` | qualquer usuário logado | ninguém pela API (só o dono do banco) |
 | `condominios` | síndico e moradores aprovados | só síndico |
 | `comunicados` | síndico e moradores aprovados | só síndico |

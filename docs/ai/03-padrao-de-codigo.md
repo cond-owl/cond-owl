@@ -133,9 +133,10 @@ Padrão rígido, mantenha:
 - Token push pertence à instalação/aparelho, não à criação da conta. Solicite
   permissão em ação explícita após login, armazene tokens por dispositivo e
   mantenha separados os provedores web e nativos quando seus formatos diferirem.
-- Push nativo Expo exige `expo-notifications`, configuração EAS de FCM/APNs e uma
-  nova build de desenvolvimento/produção após alterações nativas; não assuma que
-  token web FCM serve para Android/iOS nem que Expo Go entrega push remoto.
+- O app é um PWA. Para iOS/iPadOS, push web requer iOS/iPadOS 16.4 ou mais novo,
+  instalação na Tela de Início e pedido de permissão em resposta a um toque. Em
+  navegadores sem suporte ao Push API, informe a limitação em vez de tentar obter
+  token como se o fluxo nativo estivesse instalado.
 
 ## Ambiente (nada hardcoded)
 

@@ -113,8 +113,7 @@ with colunas_perfil as (
     'Dispositivos registrados',
     'INFO',
     count(*)::text || ' total; '
-      || count(*) filter (where plataforma = 'web')::text || ' web; '
-      || count(*) filter (where plataforma = 'expo')::text || ' nativos'
+      || count(*) filter (where plataforma = 'web')::text || ' instalação(ões) PWA'
   from public.dispositivos_notificacao
 )
 select verificacao, resultado, detalhe

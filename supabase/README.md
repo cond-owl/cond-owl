@@ -27,7 +27,7 @@ ambiente local com `supabase start`). Elas são ordenadas e cada uma tem um assu
 | `0013_usuario_pertence_ao_condominio` | `usuario_pertence_ao_condominio(codigo_informado)`: sim/não se o usuário logado pertence ao condomínio do código; associa contas antigas sem condomínio quando só existe um |
 | `0014_tipo_usuario` | tabela `tipo_usuario` (síndico, morador), `perfis.tipo_usuario_id` espelhando `app_metadata` por gatilho e `usuario_e_do_tipo(tipo_informado)` para o login |
 | `0015_notificacoes_push` | token FCM e preferências em `perfis`; concede ao usuário atualização somente dessas colunas, sujeita à policy de próprio perfil |
-| `0016_dispositivos_notificacao` | tokens por instalação e plataforma (`web`/`expo`), RLS por usuário e migração dos tokens web legados |
+| `0016_dispositivos_notificacao` | tokens por instalação do PWA, RLS por usuário e migração dos tokens web legados |
 
 Aplicar em ordem. Para dados de teste, `seeds/dev_usuarios_colinas_de_roma.sql` (não é migração; nunca em produção) cria 1 síndico e 2 moradores no condomínio, com senhas geradas na hora e mostradas só uma vez. Nada foi executado em Supabase real: foram validadas num Postgres
 descartável (Docker) com um `auth` simulado. Depois de aplicar, definir o código de
