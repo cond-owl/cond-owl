@@ -5,11 +5,27 @@ achado por achado). Aqui vai o operacional.
 
 ## Migrações
 
-- Esquema vive em `supabase/migrations/`, numerado (`0001` a `0014`) e
+- Esquema vive em `supabase/migrations/`, numerado (`0001` em diante) e
   aplicável **em ordem**.
 - **Nunca editar uma migração já aplicada.** Mudança no banco = migração
   NOVA, com o próximo número, assunto no nome e comentário explicando o
   porquê no topo do arquivo.
+- Toda coluna, função, policy ou permissão usada pelo app/Edge Function precisa
+  existir numa migração versionada, mesmo se já tiver sido criada manualmente
+  em produção. Compare as referências do código com as migrações; corrija
+  divergências com migração nova idempotente quando apropriado, sem depender
+  apenas do estado manual do painel.
+- A existência de uma coluna em produção **não comprova** que a migração foi
+  aplicada. Separe sempre duas verificações: o estado real do schema e o histórico
+  versionado no repositório.
+- `IF NOT EXISTS` evita erro ao encontrar uma coluna criada manualmente, mas não
+  corrige uma definição diferente. Se tipo, default, nulabilidade ou constraint
+  puderem divergir, a migração também deve normalizar esses atributos e tratar os
+  dados existentes antes de impor a regra (por exemplo, preencher `NULL` antes de
+  `SET NOT NULL`). Não descarte nem sobrescreva valores válidos sem necessidade.
+- Toda coluna que o cliente grava precisa de grant de coluna compatível e policy
+  RLS que limite as linhas autorizadas. Verifique ambos; grant sozinho não substitui
+  RLS, e policy sozinha não concede privilégio SQL.
 - Seeds (`supabase/seeds/`) são dados de teste, **nunca rodam em produção**.
 - O projeto **não usa** `supabase db push` no fluxo atual: as migrações são
   aplicadas no SQL Editor do Supabase, uma por uma.
@@ -55,5 +71,14 @@ achado por achado). Aqui vai o operacional.
       (tudo por `.env` + `.env.example`, ou pelo banco).
 - [ ] `npm run verificar` passa (segredo, `.env.example`, tipos e lint).
 - [ ] `supabase/docs/mapa-das-tabelas.md` atualizado.
+- [ ] Colunas e grants usados pelo código conferidos contra migrações; divergência
+      corrigida em migração nova, não só no painel.
+- [ ] Para ajustes manuais históricos, SQL somente leitura de validação incluído
+      em `scripts/` e executável no SQL Editor.
+- [ ] O SQL de validação retorna um único conjunto de resultados, com uma linha
+      por verificação e estados explícitos (`OK`, `FALHA` ou `INFO`), pois o editor
+      pode exibir somente a última consulta do script.
+- [ ] A validação confere presença e definição das colunas, grants, RLS e policies;
+      não exibe tokens, dados pessoais ou outros valores sensíveis.
 - [ ] Validado num Postgres descartável com `auth` simulado
       (roteiro no fim do `supabase/README.md`).

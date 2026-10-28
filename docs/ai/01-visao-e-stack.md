@@ -40,7 +40,10 @@ Morador novo fica em **Cadastro em Análise** até o síndico aprovar.
 - Sem tempo real: as listas recarregam ao entrar em cada aba.
 - Sem testes automatizados; conferência é `npx tsc --noEmit` + `npm run lint`.
 - Upload do PDF da ata não existe (guarda nome ou link).
-- Notificações push via Firebase (`firebase` + `src/utils/notificacoes.ts`).
+- Notificações push do PWA via Firebase Cloud Messaging Web
+  (`src/utils/notificacoes.ts`, tabela `dispositivos_notificacao`). O token é
+  registrado por instalação do PWA depois de a pessoa permitir notificações;
+  criar conta não cria nem autoriza token push.
 
 Expo muda muito entre versões: **não responder de memória**. Consultar
 https://docs.expo.dev/versions/v57.0.0/ e https://docs.expo.dev/llms.txt

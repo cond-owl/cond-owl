@@ -1,12 +1,8 @@
-// Configuração das notificações push (Firebase Cloud Messaging). Os valores do
-// Firebase vêm do .env (EXPO_PUBLIC_FIREBASE_*); nada de credencial ou URL fixa
-// no código. Sem as variáveis, as notificações ficam desativadas e o app segue
-// funcionando normalmente.
+// Registra um token FCM para cada instalação do PWA que autoriza notificações.
 import { initializeApp, type FirebaseOptions } from "firebase/app";
-import { getMessaging, getToken } from "firebase/messaging";
 import { supabase } from "../supabase";
 
-const configuracao: Pick<
+const configuracaoFirebase: Pick<
   FirebaseOptions,
   | "apiKey"
   | "authDomain"
@@ -23,37 +19,58 @@ const configuracao: Pick<
   appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
 
-const vapidKey = process.env.EXPO_PUBLIC_FIREBASE_VAPID_KEY;
+const chaveVapid = process.env.EXPO_PUBLIC_FIREBASE_VAPID_KEY;
 
-const completa = Object.values(configuracao).every(
-  (valor) => typeof valor === "string" && valor.length > 0,
-);
+export const solicitarPermissaoNotificacao = async (
+  userId: string,
+): Promise<string | null> => {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return "Este navegador não oferece suporte a notificações push.";
+  }
 
-// Só inicializa o mensageiro com a configuração completa e em navegador que
-// suporte notificações (no nativo, o push é tratado por outra via).
-const messaging =
-  completa &&
-  typeof window !== "undefined" &&
-  "Notification" in window
-    ? getMessaging(initializeApp(configuracao))
-    : null;
-
-export const solicitarPermissaoNotificacao = async (userId: string) => {
-  if (!messaging || !vapidKey) return;
+  if (!chaveVapid || !Object.values(configuracaoFirebase).every(Boolean)) {
+    return "Notificações não estão configuradas neste navegador.";
+  }
 
   try {
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") return;
+    const { getMessaging, getToken, isSupported } = await import(
+      "firebase/messaging"
+    );
+    if (!(await isSupported())) {
+      return "Este navegador não oferece suporte ao Firebase Push.";
+    }
 
-    // Se o utilizador aceitar, pede um token único ao Firebase e guarda no perfil.
-    const token = await getToken(messaging, { vapidKey });
-    if (!token) return;
+    const permissao = await Notification.requestPermission();
+    if (permissao !== "granted") {
+      return "A permissão para notificações não foi concedida.";
+    }
 
-    await supabase
-      .from("perfis")
-      .update({ fcm_token: token })
-      .eq("id", userId);
+    const registroServiceWorker = await navigator.serviceWorker.register(
+      "/firebase-messaging-sw.js",
+    );
+    const app = initializeApp(configuracaoFirebase, "condo-owl-web-push");
+    const token = await getToken(getMessaging(app), {
+      vapidKey: chaveVapid,
+      serviceWorkerRegistration: registroServiceWorker,
+    });
+
+    if (!token) return "Não foi possível registrar este navegador.";
+
+    const { data, error } = await supabase
+      .from("dispositivos_notificacao")
+      .upsert(
+        { user_id: userId, plataforma: "web", token },
+        { onConflict: "user_id,token" },
+      )
+      .select("id")
+      .maybeSingle();
+
+    if (error || !data) {
+      return "Não foi possível guardar o registro deste aparelho.";
+    }
+
+    return null;
   } catch {
-    // Falha ao registrar notificações não impede o uso do app.
+    return "Não foi possível ativar as notificações neste navegador.";
   }
 };
