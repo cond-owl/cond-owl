@@ -33,16 +33,16 @@ export const solicitarPermissaoNotificacao = async (
   }
 
   try {
+    const permissao = await Notification.requestPermission();
+    if (permissao !== "granted") {
+      return "A permissão para notificações não foi concedida.";
+    }
+
     const { getMessaging, getToken, isSupported } = await import(
       "firebase/messaging"
     );
     if (!(await isSupported())) {
       return "Este navegador não oferece suporte ao Firebase Push.";
-    }
-
-    const permissao = await Notification.requestPermission();
-    if (permissao !== "granted") {
-      return "A permissão para notificações não foi concedida.";
     }
 
     const registroServiceWorker = await navigator.serviceWorker.register(
