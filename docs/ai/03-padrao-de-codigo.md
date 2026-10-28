@@ -167,6 +167,10 @@ Padrão rígido, mantenha:
 - **Leitura de `.env` só em módulo de configuração** (`src/supabase.ts`,
   `src/utils/notificacoes.ts`). Tela e componente não leem `process.env`
   diretamente.
+- Expo substitui `EXPO_PUBLIC_*` durante a compilação. `.env` local não configura
+  automaticamente o PWA hospedado: o ambiente que gera a publicação também precisa
+  receber as variáveis necessárias, e a saída publicada deve ser conferida antes
+  do deploy. Não confunda configuração ausente no bundle com falha do serviço.
 - **Segredo que não pode ser público não existe no cliente.** A chave
   `anon` e a config web do Firebase são públicas por desenho; para qualquer
   outra credencial, a resposta é banco (função/gatilho/RLS), não `.env`.

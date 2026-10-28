@@ -20,6 +20,18 @@ const configuracaoFirebase: Pick<
 };
 
 const chaveVapid = process.env.EXPO_PUBLIC_FIREBASE_VAPID_KEY;
+const variaveisFirebase = [
+  ["EXPO_PUBLIC_FIREBASE_API_KEY", configuracaoFirebase.apiKey],
+  ["EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN", configuracaoFirebase.authDomain],
+  ["EXPO_PUBLIC_FIREBASE_PROJECT_ID", configuracaoFirebase.projectId],
+  ["EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET", configuracaoFirebase.storageBucket],
+  [
+    "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID",
+    configuracaoFirebase.messagingSenderId,
+  ],
+  ["EXPO_PUBLIC_FIREBASE_APP_ID", configuracaoFirebase.appId],
+  ["EXPO_PUBLIC_FIREBASE_VAPID_KEY", chaveVapid],
+] as const;
 
 export const solicitarPermissaoNotificacao = async (
   userId: string,
@@ -28,8 +40,11 @@ export const solicitarPermissaoNotificacao = async (
     return "Este navegador não oferece suporte a notificações push.";
   }
 
-  if (!chaveVapid || !Object.values(configuracaoFirebase).every(Boolean)) {
-    return "Notificações não estão configuradas neste navegador.";
+  const variaveisAusentes = variaveisFirebase
+    .filter(([, valor]) => !valor)
+    .map(([nome]) => nome);
+  if (variaveisAusentes.length > 0) {
+    return `Esta publicação do PWA está sem configuração de notificações. Variáveis ausentes: ${variaveisAusentes.join(", ")}.`;
   }
 
   try {
