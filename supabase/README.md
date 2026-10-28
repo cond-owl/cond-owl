@@ -26,6 +26,8 @@ ambiente local com `supabase start`). Elas são ordenadas e cada uma tem um assu
 | `0012_validar_codigo_condominio` | `validar_codigo_condominio(codigo_informado)`: sim/não para a tela de código, com `anon`; o cadastro passa a exigir código de condomínio existente e grava `perfis.condominio_id` |
 | `0013_usuario_pertence_ao_condominio` | `usuario_pertence_ao_condominio(codigo_informado)`: sim/não se o usuário logado pertence ao condomínio do código; associa contas antigas sem condomínio quando só existe um |
 | `0014_tipo_usuario` | tabela `tipo_usuario` (síndico, morador), `perfis.tipo_usuario_id` espelhando `app_metadata` por gatilho e `usuario_e_do_tipo(tipo_informado)` para o login |
+| `0015_notificacoes_push` | token FCM e preferências em `perfis`; concede ao usuário atualização somente dessas colunas, sujeita à policy de próprio perfil |
+| `0016_dispositivos_notificacao` | tokens por instalação e plataforma (`web`/`expo`), RLS por usuário e migração dos tokens web legados |
 
 Aplicar em ordem. Para dados de teste, `seeds/dev_usuarios_colinas_de_roma.sql` (não é migração; nunca em produção) cria 1 síndico e 2 moradores no condomínio, com senhas geradas na hora e mostradas só uma vez. Nada foi executado em Supabase real: foram validadas num Postgres
 descartável (Docker) com um `auth` simulado. Depois de aplicar, definir o código de
@@ -205,7 +207,8 @@ cadastrar). Todas as tabelas têm RLS ligado; sem policy, a chave anônima não 
 
 | Tabela | Quem lê | Quem escreve |
 |--------|---------|--------------|
-| `perfis` (nome, nascimento, celular, unidade, e-mail) | o próprio usuário; síndico lê todos | o usuário altera só nome e celular; criada por gatilho no cadastro |
+| `perfis` (nome, nascimento, celular, unidade, e-mail e preferências push) | o próprio usuário; síndico lê todos | o usuário altera nome, celular e preferências; criada por gatilho no cadastro |
+| `dispositivos_notificacao` | só o dono dos tokens | o usuário registra e remove seus dispositivos; múltiplos por perfil |
 | `condominios` (nome, código) | síndico e moradores aprovados | só síndico; código único, em minúsculas |
 | `comunicados` / `comunicados_vistos` | síndico e moradores aprovados | só síndico publica; cada um registra o seu "visto" |
 | `eventos` (inclui reservas) | síndico e moradores aprovados | síndico cria qualquer um; morador aprovado só reserva em seu nome, de hoje em diante |

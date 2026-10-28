@@ -117,6 +117,26 @@ Padrão rígido, mantenha:
   migrações e são usados em `maxLength` no app.
 - `trim()` em todo texto antes de gravar.
 
+### Banco como contrato do código
+
+- Antes de usar uma tabela, coluna, RPC ou policy no app ou numa Edge Function,
+  confirme que ela existe nas migrações versionadas e confira tipo, nulabilidade,
+  default, grants e RLS. O fato de funcionar no banco atual não prova que o
+  esquema está registrado no repositório.
+- Cada mudança de esquema acompanha o código numa migração nova. Não dependa de
+  uma alteração manual feita no painel de produção como única definição do banco.
+- Ao encontrar uma coluna criada manualmente, não a ignore nem conclua que a
+  migração já foi aplicada: registre a definição desejada numa migração que também
+  reconcilie o estado existente com segurança, preservando os dados válidos.
+- Ao validar gravações protegidas por RLS, confira tanto o grant da coluna quanto
+  a policy da linha. `UPDATE` sem erro não prova que uma linha foi alterada.
+- Token push pertence à instalação/aparelho, não à criação da conta. Solicite
+  permissão em ação explícita após login, armazene tokens por dispositivo e
+  mantenha separados os provedores web e nativos quando seus formatos diferirem.
+- Push nativo Expo exige `expo-notifications`, configuração EAS de FCM/APNs e uma
+  nova build de desenvolvimento/produção após alterações nativas; não assuma que
+  token web FCM serve para Android/iOS nem que Expo Go entrega push remoto.
+
 ## Ambiente (nada hardcoded)
 
 - **Nenhum valor configurável pode ficar hardcoded no código.** Toda

@@ -29,6 +29,11 @@ npm run e2e         # build web + Playwright (entrada no app)
   (`no-explicit-any`, `no-console`, datas restritas a `calendario.ts`) e o
   `scripts/verificar.mjs`, que barra credencial hardcoded e variável
   `EXPO_PUBLIC_*` usada sem linha no `.env.example`.
+- Quando o código consulta ou grava dados no Supabase, revisar as referências
+  de tabelas/colunas/RPCs contra as migrações e conferir grants e RLS. Para schema
+  que também foi alterado manualmente em produção, preparar SQL somente leitura
+  que mostre o estado atual em um único resultado; não inferir histórico de
+  migração apenas pela presença das colunas.
 - `npm run e2e` gera a build web e roda os testes do Playwright em
   `e2e/` — hoje cobre a barreira de código do condomínio (abertura, código
   vazio, código inexistente e código válido indo ao login), com o RPC do

@@ -2,7 +2,7 @@
 
 - **Projeto:** CondoOwl (Supabase)
 - **Branch:** fix/0001-vulnerabilidade-perfil-aprovacao
-- **Migrações:** 0001 a 0014
+- **Migrações:** 0001 a 0016
 - **Situação:** esquema validado em Postgres de teste; o app usa o cadastro, a aprovação, os comunicados, as reservas, as sugestões e as atas
 
 ## 1. Visão geral
@@ -15,8 +15,12 @@ mindmap
         perfil e aprovação ficam em app_metadata
       perfis
         nome, nascimento, celular, unidade
+        preferências de notificação
         condominio_id
         tipo_usuario_id
+      dispositivos_notificacao
+        token por instalação
+        plataforma web ou Expo
       tipo_usuario
         síndico e morador
       app_secrets
@@ -50,6 +54,7 @@ mindmap
 ```mermaid
 erDiagram
     AUTH_USERS ||--|| PERFIS : "um perfil por usuário"
+    PERFIS ||--o{ DISPOSITIVOS_NOTIFICACAO : "tokens por aparelho"
     CONDOMINIOS ||--o{ PERFIS : "reúne moradores"
     AUTH_USERS ||--o{ COMUNICADOS : "síndico publica"
     COMUNICADOS ||--o{ COMUNICADOS_VISTOS : "foi visto por"
@@ -64,6 +69,12 @@ erDiagram
         date data_nascimento
         text unidade
         bigint condominio_id
+    }
+    DISPOSITIVOS_NOTIFICACAO {
+        uuid id
+        uuid user_id
+        text plataforma
+        text token
     }
     CONDOMINIOS {
         bigint id
@@ -120,7 +131,8 @@ sequenceDiagram
 
 | Tabela | Ler | Escrever |
 |--------|-----|----------|
-| `perfis` | o próprio usuário; síndico lê todos | usuário altera só nome e celular |
+| `perfis` | o próprio usuário; síndico lê todos | usuário altera nome, celular e preferências de notificação |
+| `dispositivos_notificacao` | o próprio usuário | usuário registra seus tokens web e nativos; síndico não lê tokens |
 | `tipo_usuario` | qualquer usuário logado | ninguém pela API (só o dono do banco) |
 | `condominios` | síndico e moradores aprovados | só síndico |
 | `comunicados` | síndico e moradores aprovados | só síndico |

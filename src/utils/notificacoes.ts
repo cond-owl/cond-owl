@@ -1,12 +1,12 @@
-// Configuração das notificações push (Firebase Cloud Messaging). Os valores do
-// Firebase vêm do .env (EXPO_PUBLIC_FIREBASE_*); nada de credencial ou URL fixa
-// no código. Sem as variáveis, as notificações ficam desativadas e o app segue
-// funcionando normalmente.
+// Registra um token push por dispositivo. O navegador usa FCM Web; os apps
+// nativos usam Expo Push para encaminhar notificações a FCM e APNs.
+import Constants from "expo-constants";
+import * as Notifications from "expo-notifications";
+import { Platform } from "react-native";
 import { initializeApp, type FirebaseOptions } from "firebase/app";
-import { getMessaging, getToken } from "firebase/messaging";
 import { supabase } from "../supabase";
 
-const configuracao: Pick<
+const configuracaoFirebase: Pick<
   FirebaseOptions,
   | "apiKey"
   | "authDomain"
@@ -23,37 +23,84 @@ const configuracao: Pick<
   appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
 
-const vapidKey = process.env.EXPO_PUBLIC_FIREBASE_VAPID_KEY;
+const chaveVapid = process.env.EXPO_PUBLIC_FIREBASE_VAPID_KEY;
 
-const completa = Object.values(configuracao).every(
-  (valor) => typeof valor === "string" && valor.length > 0,
-);
+const salvarToken = async (
+  userId: string,
+  plataforma: "web" | "expo",
+  token: string,
+): Promise<string | null> => {
+  const { data, error } = await supabase
+    .from("dispositivos_notificacao")
+    .upsert(
+      { user_id: userId, plataforma, token },
+      { onConflict: "user_id,token" },
+    )
+    .select("id")
+    .maybeSingle();
 
-// Só inicializa o mensageiro com a configuração completa e em navegador que
-// suporte notificações (no nativo, o push é tratado por outra via).
-const messaging =
-  completa &&
-  typeof window !== "undefined" &&
-  "Notification" in window
-    ? getMessaging(initializeApp(configuracao))
-    : null;
+  if (error || !data) {
+    return "Não foi possível guardar o registro deste aparelho.";
+  }
 
-export const solicitarPermissaoNotificacao = async (userId: string) => {
-  if (!messaging || !vapidKey) return;
+  return null;
+};
+
+const registrarTokenWeb = async (userId: string): Promise<string | null> => {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return "Este navegador não oferece suporte a notificações push.";
+  }
+
+  if (!chaveVapid || !Object.values(configuracaoFirebase).every(Boolean)) {
+    return "Notificações web não estão configuradas.";
+  }
 
   try {
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") return;
+    const permissao = await Notification.requestPermission();
+    if (permissao !== "granted") {
+      return "A permissão para notificações não foi concedida.";
+    }
 
-    // Se o utilizador aceitar, pede um token único ao Firebase e guarda no perfil.
-    const token = await getToken(messaging, { vapidKey });
-    if (!token) return;
+    const { getMessaging, getToken } = await import("firebase/messaging");
+    const app = initializeApp(configuracaoFirebase, "condo-owl-web-push");
+    const token = await getToken(getMessaging(app), { vapidKey: chaveVapid });
+    if (!token) return "Não foi possível registrar este navegador.";
 
-    await supabase
-      .from("perfis")
-      .update({ fcm_token: token })
-      .eq("id", userId);
+    return salvarToken(userId, "web", token);
   } catch {
-    // Falha ao registrar notificações não impede o uso do app.
+    return "Não foi possível ativar as notificações neste navegador.";
   }
 };
+
+const registrarTokenNativo = async (userId: string): Promise<string | null> => {
+  try {
+    if (Platform.OS === "android") {
+      await Notifications.setNotificationChannelAsync("default", {
+        name: "Avisos do condomínio",
+        importance: Notifications.AndroidImportance.DEFAULT,
+      });
+    }
+
+    const permissaoAtual = await Notifications.getPermissionsAsync();
+    const permissao = permissaoAtual.granted
+      ? permissaoAtual
+      : await Notifications.requestPermissionsAsync();
+    if (!permissao.granted) {
+      return "A permissão para notificações não foi concedida.";
+    }
+
+    const projectId =
+      Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+    if (!projectId) return "A configuração de notificações do app está incompleta.";
+
+    const token = await Notifications.getExpoPushTokenAsync({ projectId });
+    return salvarToken(userId, "expo", token.data);
+  } catch {
+    return "Não foi possível registrar este aparelho para notificações.";
+  }
+};
+
+export const solicitarPermissaoNotificacao = (userId: string) =>
+  Platform.OS === "web"
+    ? registrarTokenWeb(userId)
+    : registrarTokenNativo(userId);

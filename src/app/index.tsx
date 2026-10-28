@@ -114,18 +114,24 @@ export default function App() {
   });
 
   const carregarPreferencias = async (uid: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("perfis")
       .select("notifica_manutencao, notifica_social")
       .eq("id", uid)
       .single();
 
-    if (data) {
-      setPrefsNotificacoes({
-        manutencao: data.notifica_manutencao ?? true,
-        social: data.notifica_social ?? true,
-      });
+    if (error || !data) {
+      mostrarAlerta(
+        "Erro",
+        "Não foi possível carregar as preferências de notificações.",
+      );
+      return;
     }
+
+    setPrefsNotificacoes({
+      manutencao: data.notifica_manutencao,
+      social: data.notifica_social,
+    });
   };
 
   const alternarPreferencia = async (
@@ -134,15 +140,23 @@ export default function App() {
   ) => {
     setPrefsNotificacoes((prev) => ({ ...prev, [chave]: valor }));
 
+    const uid = session?.user.id;
+    if (!uid) {
+      mostrarAlerta("Erro", "Não foi possível identificar sua sessão.");
+      setPrefsNotificacoes((prev) => ({ ...prev, [chave]: !valor }));
+      return;
+    }
+
     const coluna =
       chave === "manutencao" ? "notifica_manutencao" : "notifica_social";
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("perfis")
       .update({ [coluna]: valor })
-      // Utilizamos auth.uid() indiretamente através da sessão
-      .eq("id", session?.user?.id);
+      .eq("id", uid)
+      .select("id")
+      .maybeSingle();
 
-    if (error) {
+    if (error || !data) {
       mostrarAlerta("Erro", "Não foi possível guardar a sua preferência.");
       setPrefsNotificacoes((prev) => ({ ...prev, [chave]: !valor }));
     }
@@ -410,8 +424,6 @@ export default function App() {
 
     carregarComunicados().then(aplicarComunicados);
 
-    // Pede a permissão e guarda o Token assim que o mural abre
-    solicitarPermissaoNotificacao(uidLogado);
     carregarPreferencias(uidLogado);
   }, [uidLogado, isPending]);
 
@@ -1730,10 +1742,32 @@ export default function App() {
                     lineHeight: 20,
                   }}
                 >
-                  Escolha os tipos de comunicados opcionais que deseja receber
-                  no seu telemóvel. Avisos urgentes e de reuniões são sempre
-                  enviados.
+                  Escolha os tipos de comunicados opcionais. Ative as
+                  notificações neste aparelho para receber avisos push. Avisos
+                  urgentes e de reuniões são sempre enviados.
                 </Text>
+
+                <TouchableOpacity
+                  onPress={() => {
+                    if (!uidLogado) return;
+
+                    solicitarPermissaoNotificacao(uidLogado).then((erro) => {
+                      if (erro) mostrarAlerta("Notificações", erro);
+                    });
+                  }}
+                  style={{
+                    alignSelf: "flex-start",
+                    marginBottom: 16,
+                    paddingVertical: 10,
+                    paddingHorizontal: 14,
+                    borderRadius: 10,
+                    backgroundColor: theme.primary[0],
+                  }}
+                >
+                  <Text style={{ color: "#FFF", fontWeight: "bold" }}>
+                    Ativar notificações neste aparelho
+                  </Text>
+                </TouchableOpacity>
 
                 {/* Switch Manutenção */}
                 <View
