@@ -418,6 +418,15 @@ export default function App() {
   };
   // Carrega quando há sessão liberada (morador pendente não passa do RLS).
   const uidLogado = session?.user.id;
+  const notificacaoPendente =
+    typeof Notification !== "undefined" && Notification.permission === "default";
+
+  const habilitarNotificacoes = async () => {
+    if (!uidLogado) return;
+
+    const erro = await solicitarPermissaoNotificacao(uidLogado);
+    if (erro) mostrarAlerta("Notificações", erro);
+  };
 
   useEffect(() => {
     if (!uidLogado || isPending) return;
@@ -1027,6 +1036,50 @@ export default function App() {
                   </TouchableOpacity>
                 )}
               </View>
+
+              {notificacaoPendente && (
+                <View
+                  style={[
+                    styles.card,
+                    {
+                      backgroundColor: theme.card,
+                      borderColor: theme.primary[0],
+                      padding: 16,
+                      marginBottom: 16,
+                    },
+                  ]}
+                >
+                  <Text style={{ color: theme.text, fontWeight: "bold" }}>
+                    Quer receber avisos neste PWA?
+                  </Text>
+                  <Text
+                    style={{
+                      color: theme.textMuted,
+                      marginTop: 6,
+                      marginBottom: 12,
+                      lineHeight: 20,
+                    }}
+                  >
+                    Toque abaixo para permitir notificações neste aparelho. No
+                    iPhone ou iPad, abra o PWA pelo ícone adicionado à Tela de
+                    Início.
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => void habilitarNotificacoes()}
+                    style={{
+                      alignSelf: "flex-start",
+                      paddingVertical: 10,
+                      paddingHorizontal: 14,
+                      borderRadius: 10,
+                      backgroundColor: theme.primary[0],
+                    }}
+                  >
+                    <Text style={{ color: "#FFF", fontWeight: "bold" }}>
+                      Ativar notificações
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
 
               {erroComunicados !== "" && (
                 <Text style={{ color: "#ef4444", marginBottom: 12 }}>
@@ -1748,13 +1801,7 @@ export default function App() {
                 </Text>
 
                 <TouchableOpacity
-                  onPress={() => {
-                    if (!uidLogado) return;
-
-                    solicitarPermissaoNotificacao(uidLogado).then((erro) => {
-                      if (erro) mostrarAlerta("Notificações", erro);
-                    });
-                  }}
+                  onPress={() => void habilitarNotificacoes()}
                   style={{
                     alignSelf: "flex-start",
                     marginBottom: 16,

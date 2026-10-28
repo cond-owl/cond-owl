@@ -137,6 +137,9 @@ Padrão rígido, mantenha:
   instalação na Tela de Início e pedido de permissão em resposta a um toque. Em
   navegadores sem suporte ao Push API, informe a limitação em vez de tentar obter
   token como se o fluxo nativo estivesse instalado.
+- Chame `Notification.requestPermission()` diretamente durante o callback do
+  toque que iniciou a inscrição, antes de `await`, imports dinâmicos ou chamadas
+  de rede. O navegador pode recusar o prompt quando o gesto do usuário já expirou.
 
 ## Ambiente (nada hardcoded)
 
