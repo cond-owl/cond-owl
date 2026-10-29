@@ -29,6 +29,8 @@ ambiente local com `supabase start`). Elas são ordenadas e cada uma tem um assu
 | `0015_notificacoes_push` | token FCM e preferências em `perfis`; concede ao usuário atualização somente dessas colunas, sujeita à policy de próprio perfil |
 | `0016_dispositivos_notificacao` | tokens por instalação do PWA, RLS por usuário e migração dos tokens web legados |
 | `0017_gatilho_notificar_comunicado` | gatilho `comunicados_notificar` (pg_net) que chama a Edge Function `notificar-comunicados` a cada comunicado publicado; URL e segredo da função vêm do Vault |
+| `0018_espacos_de_reserva` | tabela `espacos_reserva` (nome único sem diferenciar maiúsculas); aprovados leem, só o síndico cria e remove; o calendário deixou de usar a lista fixa de espaços |
+| `0019_comunicados_conduta` | `comunicados.importante` e `comunicados.unidade_destino`; Conduta exige o apartamento e a policy de leitura limita o morador aos comunicados gerais e aos do próprio apartamento; a ciência só é aceita para comunicado que o usuário consegue ler |
 
 Aplicar em ordem. Para dados de teste, `seeds/dev_usuarios_colinas_de_roma.sql` (não é migração; nunca em produção) cria 1 síndico e 2 moradores no condomínio, com senhas geradas na hora e mostradas só uma vez. Nada foi executado em Supabase real: foram validadas num Postgres
 descartável (Docker) com um `auth` simulado. Depois de aplicar, definir o código de
@@ -311,6 +313,11 @@ Decisões:
 - **Código validado também fica em memória.** Se o armazenamento do aparelho falhar
   (navegador em modo restrito), o código vale até fechar o app em vez de o login negar em
   silêncio. A pessoa é avisada de que terá de informá-lo de novo.
+- **Espaços de reserva vêm do banco (0018).** A lista fixa no app foi substituída pela
+  tabela `espacos_reserva`: o síndico cria e remove na aba Gestão e o formulário de reserva
+  lê a mesma lista. O nome é único sem diferenciar maiúsculas. Remover um espaço não apaga
+  reservas antigas, porque `eventos` guarda o nome do espaço (`titulo`), não o id.
+  
 - **Reservas, sugestões e atas passaram a ser gravadas no banco.** Antes eram listas em
   memória que sumiam ao recarregar. O app grava e lê pelas tabelas `eventos`, `sugestoes` e
   `atas` direto pelo cliente do Supabase (`src/utils/dadosCondominio.ts`), sem endpoint
@@ -340,6 +347,11 @@ Decisões:
   não depender do formato da chave de serviço do projeto. Ela só envia a tokens `web`,
   devolve falhas por código do FCM (visíveis em `net._http_response`) e apaga tokens que o
   FCM declara inexistentes.
+  - **Comunicado de conduta só notifica o apartamento destinatário (0019).** O gatilho
+  manda só os campos básicos, então a função relê a linha publicada com `service_role` e,
+  quando há `unidade_destino`, envia apenas aos tokens dos perfis daquele apartamento
+  (comparação sem diferenciar maiúsculas, a mesma do RLS). As preferências de manutenção e
+  social não se aplicam a conduta.
 - **O aparelho reregistra o token sozinho após o login** quando a permissão já foi
   concedida (`sincronizarNotificacao`). O cartão "Ativar notificações" some depois da
   concessão; sem o reregistro, quem concedeu antes da configuração do Firebase estar

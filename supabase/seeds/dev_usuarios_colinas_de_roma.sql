@@ -2,7 +2,7 @@
 -- Branch fix/0001-vulnerabilidade-perfil-aprovacao.
 --
 -- NÃO é migração e NÃO deve rodar em produção: cria contas de teste. Rodar no SQL Editor
--- DEPOIS das migrações 0001 a 0014 (sem a 0013 o login conferiria o condomínio e falharia;
+-- DEPOIS das migrações 0001 a 0019 (sem a 0013 o login conferiria o condomínio e falharia;
 -- sem a 0014 não existe o tipo de usuário que o login confere). As senhas são geradas aqui, aparecem só no resultado
 -- final desta execução e não ficam no repositório: copie na hora.
 -- Pode rodar de novo: quem já existe não é recriado nem tem a senha trocada.

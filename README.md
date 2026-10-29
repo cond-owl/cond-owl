@@ -58,7 +58,7 @@ Pré-requisitos: Node.js (versão LTS recente) e um projeto Supabase.
    ```
 
 3. **Montar o banco.** No SQL Editor do Supabase, rode em ordem os arquivos de
-   [`supabase/migrations/`](supabase/migrations) (`0001` a `0014`). Depois defina o código
+   [`supabase/migrations/`](supabase/migrations) (`0001` a `0019`). Depois defina o código
    de síndico (instruções no comentário da `0001`). Para ter contas de teste prontas, rode
    uma vez `supabase/seeds/dev_usuarios_colinas_de_roma.sql` (**nunca em produção**).
    Detalhes e decisões em [`supabase/README.md`](supabase/README.md).
@@ -101,7 +101,7 @@ src/
 │   └── avisar.ts             alerta que funciona no celular e no navegador
 └── constants/ hooks/    tema e utilitários do template do Expo
 supabase/
-├── migrations/          esquema do banco, em ordem (0001 a 0014)
+├── migrations/          esquema do banco, em ordem (0001 a 0019)
 ├── seeds/               contas de teste (só desenvolvimento)
 ├── docs/                mapa das tabelas
 └── README.md            segurança do banco e motivo de cada decisão
