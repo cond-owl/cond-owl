@@ -141,6 +141,7 @@ sequenceDiagram
 | `atas` | síndico e moradores aprovados | só síndico |
 | `sugestoes` | síndico e moradores aprovados | morador envia como pendente; só síndico avalia |
 | `app_secrets` | ninguém pela API | só por SQL, pelo dono do banco |
+| `espacos_reserva` | síndico e moradores aprovados | só síndico cria e remove |
 
 Quem não está logado (`anon`) não acessa nenhuma tabela. A única coisa que `anon` executa é `validar_codigo_condominio`, que só responde sim ou não.
 
@@ -153,6 +154,7 @@ Quem não está logado (`anon`) não acessa nenhuma tabela. A única coisa que `
 - **Sugestão arquivada** exige motivo.
 - **Código do condomínio** é único e só em minúsculas.
 - **Condomínio com moradores** não pode ser apagado.
+- **Espaço de reserva repetido** (mesmo nome, sem diferenciar maiúsculas) é barrado.
 
 ## 6. O que ainda não existe
 
