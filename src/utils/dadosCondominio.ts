@@ -1,10 +1,11 @@
 import { supabase } from "../supabase";
 import { MESES } from "./calendario";
 
-// Acesso às tabelas eventos (reservas), sugestoes e atas. Quem protege os dados é o RLS
-// (supabase/migrations 0006 a 0008); aqui só se consulta e se traduz o erro do banco.
-// As listas devolvem null em caso de erro (quem chama decide o que mostrar); as
-// gravações devolvem a mensagem de erro para o usuário, ou null se deu certo.
+// Acesso às tabelas eventos (reservas), espacos_reserva (configuração do síndico),
+// sugestoes e atas. Quem protege os dados é o RLS (supabase/migrations 0006 a 0008 e
+// 0015); aqui só se consulta e se traduz o erro do banco. As listas devolvem null em
+// caso de erro (quem chama decide o que mostrar); as gravações devolvem a mensagem de
+// erro para o usuário, ou null se deu certo.
 
 export interface Evento {
   data: string; // AAAA-MM-DD
@@ -18,6 +19,10 @@ export interface Reuniao {
   data: string; // DD/MM/AAAA
   pauta: string;
   link: string;
+}
+export interface EspacoReserva {
+  id: number;
+  nome: string;
 }
 export interface Ata {
   mes: string; // "Outubro 2026"
@@ -40,6 +45,12 @@ interface EventoRow {
   hora_fim: string | null;
 }
 
+// Linha da tabela `espacos_reserva` como o PostgREST devolve.
+interface EspacoRow {
+  id: number;
+  nome: string;
+}
+
 // Limites das colunas (iguais aos CHECK das migrações); o app usa em maxLength.
 export const LIMITE = {
   detalhes: 2000,
@@ -47,6 +58,7 @@ export const LIMITE = {
   motivo: 1000,
   pauta: 200,
   arquivo: 500,
+  espaco: 60,
 };
 
 // "18:00:00" (coluna time) -> "18:00"
@@ -117,6 +129,49 @@ export const criarReserva = async (reserva: {
     "42501": "Não foi possível reservar: confira a data e se o seu acesso já foi aprovado.",
     "23514": "Horário inválido: a hora final deve ser maior que a inicial.",
   });
+};
+
+// --- ESPAÇOS DE RESERVA ---
+
+export const carregarEspacos = async (): Promise<EspacoReserva[] | null> => {
+  const { data, error } = await supabase
+    .from("espacos_reserva")
+    .select("id, nome")
+    .order("nome");
+  if (error) return null;
+  return (data ?? []).map((e: EspacoRow) => ({ id: e.id, nome: e.nome }));
+};
+
+export const criarEspaco = async (nome: string): Promise<string | null> => {
+  const { error } = await supabase
+    .from("espacos_reserva")
+    .insert({ nome: nome.trim() });
+  if (!error) return null;
+  return mensagemDoErro(error, "Não foi possível criar o espaço", {
+    // índice único em lower(nome): nome repetido sem diferenciar maiúsculas
+    "23505": "Já existe um espaço com esse nome.",
+    "23514": `O nome deve ter entre 1 e ${LIMITE.espaco} caracteres.`,
+    "42501": "Apenas o síndico pode criar espaços.",
+  });
+};
+
+// O RLS não devolve erro quando não permite (0 linhas), então confere que a linha
+// foi mesmo apagada. As reservas antigas ficam no calendário: elas guardam o nome
+// do espaço, não o id.
+export const removerEspaco = async (id: number): Promise<string | null> => {
+  const { data, error } = await supabase
+    .from("espacos_reserva")
+    .delete()
+    .eq("id", id)
+    .select("id");
+  if (error) {
+    return mensagemDoErro(error, "Não foi possível remover o espaço", {
+      "42501": "Apenas o síndico pode remover espaços.",
+    });
+  }
+  return data && data.length > 0
+    ? null
+    : "Apenas o síndico pode remover espaços.";
 };
 
 // --- SUGESTÕES ---

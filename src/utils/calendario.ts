@@ -56,3 +56,22 @@ export const horaParaData = (hora: string) => {
   d.setHours(h, m, 0, 0);
   return d;
 };
+
+// "HH:mm" -> minutos desde a meia-noite. Usado nas regras de horario das reservas.
+export const minutosDaHora = (hora: string) => {
+  const [h, m] = hora.split(":").map(Number);
+  return h * 60 + m;
+};
+
+// Minutos desde a meia-noite -> "HH:mm". Valores fora do dia dao a volta (0 = 00:00).
+export const horaDosMinutos = (minutos: number) => {
+  const normalizado = ((minutos % 1440) + 1440) % 1440;
+  return `${doisDigitos(Math.floor(normalizado / 60))}:${doisDigitos(normalizado % 60)}`;
+};
+
+// Arredonda "HH:mm" para o passo de minutos, sem passar do ultimo horario do dia
+// (23:55 com passo 5). Garante que o seletor da web so produza horarios validos.
+export const arredondarHora = (hora: string, passo: number) => {
+  const arredondado = Math.round(minutosDaHora(hora) / passo) * passo;
+  return horaDosMinutos(Math.min(arredondado, 1440 - passo));
+};

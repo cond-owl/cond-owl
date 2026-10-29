@@ -26,7 +26,9 @@ import {
 } from "react-native-safe-area-context";
 import { Auth } from "../Auth"; // Ajuste o caminho se necessário
 import { DateTimeField } from "../components/date-time-field";
+import { MenuLateral } from "../components/menu-lateral";
 import { ModalOverlay } from "../components/modal-overlay";
+import { SecaoRetratil } from "../components/secao-retratil";
 import { supabase } from "../supabase"; // Ajuste o caminho se necessário
 import {
   DIAS_SEMANA,
@@ -38,8 +40,10 @@ import {
   formatarDataCurta,
   formatarDataLonga,
   formatarHora,
+  horaDosMinutos,
   horaParaData,
   inicioDoDia,
+  minutosDaHora,
 } from "../utils/calendario";
 import {
   definirTipoDoLogin,
@@ -52,12 +56,16 @@ import {
   LIMITE,
   avaliarSugestaoNoBanco,
   carregarAtas,
+  carregarEspacos,
   carregarEventos,
   carregarSugestoes,
   criarAta,
+  criarEspaco,
   criarReserva,
   criarSugestao,
+  removerEspaco,
   type Ata,
+  type EspacoReserva,
   type Evento,
   type Sugestao,
 } from "../utils/dadosCondominio";
@@ -81,6 +89,7 @@ interface Comunicado {
   data: string;
   vistoPor: string[];
 }
+
 
 const ORIENTACOES: ("portrait" | "landscape")[] = ["portrait", "landscape"];
 
@@ -306,6 +315,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>("feed");
   const [clickCount, setClickCount] = useState<number>(0);
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
+  const [ajustesVisivel, setAjustesVisivel] = useState<boolean>(false);
 
   // --- RESPONSIVIDADE (celulares, tablets e PWA) ---
   const { width: larguraTela } = useWindowDimensions();
@@ -344,7 +354,7 @@ export default function App() {
 
   // Executa a busca automaticamente sempre que o síndico abre a aba de aprovações
   useEffect(() => {
-    if (user === "sindico" && activeTab === "aprovacoes") {
+    if (user === "sindico" && activeTab === "gestao") {
       buscarPendentes();
     }
   }, [user, activeTab]);
@@ -466,7 +476,7 @@ export default function App() {
   const [showAvaliarSugestao, setShowAvaliarSugestao] = useState<number | null>(
     null,
   );
-  const [showNovaReserva, setShowNovaReserva] = useState<boolean>(false);
+    const [showNovaReserva, setShowNovaReserva] = useState<boolean>(false);
   const [dataReserva, setDataReserva] = useState<Date>(new Date());
   const [novaReserva, setNovaReserva] = useState({
     titulo: "",
@@ -474,6 +484,190 @@ export default function App() {
     horaInicio: "",
     horaFim: "",
   });
+
+  // Espaços de reserva vêm do banco (tabela espacos_reserva): o síndico cria e
+  // remove na aba Gestão e o formulário de reserva lê esta lista, sem nomes fixos.
+  const [espacos, setEspacos] = useState<EspacoReserva[]>([]);
+  const [erroEspacos, setErroEspacos] = useState<string>("");
+  const [novoEspaco, setNovoEspaco] = useState<string>("");
+  const [erroNovoEspaco, setErroNovoEspaco] = useState<string>("");
+  const [salvandoEspaco, setSalvandoEspaco] = useState<boolean>(false);
+  const [espacoParaRemover, setEspacoParaRemover] =
+    useState<EspacoReserva | null>(null);
+  const [removendoEspaco, setRemovendoEspaco] = useState<boolean>(false);
+
+  const aplicarEspacos = (lista: EspacoReserva[] | null) => {
+    setErroEspacos(
+      lista ? "" : "Não foi possível carregar os espaços de reserva.",
+    );
+    if (lista) setEspacos(lista);
+  };
+
+  useEffect(() => {
+    if (!uidLogado || isPending) return;
+    carregarEspacos().then(aplicarEspacos);
+  }, [uidLogado, isPending]);
+
+  // Para reservas de hoje só valem horários a partir de 30 minutos depois de agora,
+  // alinhados ao passo de 5 minutos do seletor. Passando da meia-noite, não há mais
+  // horário disponível no dia.
+  const minutosDoRelogio = new Date();
+  const minutosMinimosHoje =
+    Math.ceil(
+      (minutosDoRelogio.getHours() * 60 +
+        minutosDoRelogio.getMinutes() +
+        30) /
+        5,
+    ) * 5;
+  const semHorarioHoje = minutosMinimosHoje >= 24 * 60;
+  const horaMinimaHoje = semHorarioHoje
+    ? "23:55"
+    : horaDosMinutos(minutosMinimosHoje);
+
+  // Conflito de reserva: mesmo espaço, mesmo dia e horários que se cruzam. A
+  // checagem local é um aviso imediato; quem decide de verdade é a constraint do
+  // banco. Sem hora final, verifica se o horário cai dentro de uma reserva.
+  const reservaEmConflito = (inicio: string, fim?: string) => {
+    if (!novaReserva.titulo) return false;
+    const chave = chaveData(dataReserva);
+    const inicioMin = minutosDaHora(inicio);
+    const fimMin = fim ? minutosDaHora(fim) : inicioMin + 1;
+    return eventos.some((ev) => {
+      if (
+        ev.tipo !== "reserva" ||
+        ev.data !== chave ||
+        ev.titulo !== novaReserva.titulo ||
+        !ev.horaInicio ||
+        !ev.horaFim
+      ) {
+        return false;
+      }
+      return (
+        inicioMin < minutosDaHora(ev.horaFim) &&
+        fimMin > minutosDaHora(ev.horaInicio)
+      );
+    });
+  };
+
+  const escolherHoraInicio = (d: Date) => {
+    const hora = formatarHora(d);
+    const ehHoje = chaveData(dataReserva) === hojeChave;
+
+    if (
+      ehHoje &&
+      (semHorarioHoje || minutosDaHora(hora) < minutosMinimosHoje)
+    ) {
+      setNovaReserva((prev) => ({ ...prev, horaInicio: "" }));
+      return mostrarAlerta(
+        "Atenção",
+        semHorarioHoje
+          ? "Já não há horários disponíveis para reservar hoje."
+          : `Para hoje, escolha um horário a partir de ${horaMinimaHoje}.`,
+      );
+    }
+
+    if (reservaEmConflito(hora)) {
+      setNovaReserva((prev) => ({ ...prev, horaInicio: "" }));
+      return mostrarAlerta(
+        "Indisponível",
+        "Este espaço já está reservado neste horário. Escolha outro horário.",
+      );
+    }
+
+    if (
+      novaReserva.horaFim &&
+      minutosDaHora(hora) >= minutosDaHora(novaReserva.horaFim)
+    ) {
+      setNovaReserva((prev) => ({ ...prev, horaInicio: "" }));
+      return mostrarAlerta(
+        "Atenção",
+        "A hora inicial deve ser menor que a hora final. Escolha a hora inicial de novo.",
+      );
+    }
+
+    if (
+      novaReserva.horaFim &&
+      reservaEmConflito(hora, novaReserva.horaFim)
+    ) {
+      setNovaReserva((prev) => ({ ...prev, horaInicio: "" }));
+      return mostrarAlerta(
+        "Indisponível",
+        "Este intervalo já tem uma reserva. Escolha outro horário.",
+      );
+    }
+
+    setNovaReserva((prev) => ({ ...prev, horaInicio: hora }));
+  };
+
+  const escolherHoraFim = (d: Date) => {
+    const hora = formatarHora(d);
+
+    if (!novaReserva.horaInicio) {
+      setNovaReserva((prev) => ({ ...prev, horaFim: "" }));
+      return mostrarAlerta("Atenção", "Escolha primeiro a hora inicial.");
+    }
+
+    if (minutosDaHora(hora) <= minutosDaHora(novaReserva.horaInicio)) {
+      setNovaReserva((prev) => ({ ...prev, horaFim: "" }));
+      return mostrarAlerta(
+        "Atenção",
+        "A hora final deve ser maior que a hora inicial. Escolha a hora final de novo.",
+      );
+    }
+
+    if (reservaEmConflito(novaReserva.horaInicio, hora)) {
+      setNovaReserva((prev) => ({ ...prev, horaFim: "" }));
+      return mostrarAlerta(
+        "Indisponível",
+        "Este intervalo já tem uma reserva. Escolha outro horário.",
+      );
+    }
+
+    setNovaReserva((prev) => ({ ...prev, horaFim: hora }));
+  };
+
+  const aoMudarDataReserva = (d: Date) => {
+    setDataReserva(d);
+    // Trocar o dia invalida os horários já escolhidos: eles podem conflitar ou
+    // deixar de respeitar a regra de hoje.
+    setNovaReserva((prev) => ({ ...prev, horaInicio: "", horaFim: "" }));
+  };
+
+  const adicionarEspaco = async () => {
+    if (salvandoEspaco) return;
+    if (!novoEspaco.trim()) {
+      setErroNovoEspaco("Informe o nome do espaço.");
+      return;
+    }
+    setSalvandoEspaco(true);
+    setErroNovoEspaco("");
+    const erro = await criarEspaco(novoEspaco);
+    if (erro) {
+      setSalvandoEspaco(false);
+      setErroNovoEspaco(erro);
+      return;
+    }
+    aplicarEspacos(await carregarEspacos());
+    setSalvandoEspaco(false);
+    setNovoEspaco("");
+  };
+
+  const confirmarRemocaoEspaco = async () => {
+    if (!espacoParaRemover || removendoEspaco) return;
+    const removido = espacoParaRemover;
+    setRemovendoEspaco(true);
+    const erro = await removerEspaco(removido.id);
+    setRemovendoEspaco(false);
+    setEspacoParaRemover(null);
+    if (erro) return mostrarAlerta("Erro", erro);
+    // Se o espaço removido estava escolhido no formulário, limpa a escolha.
+    setNovaReserva((prev) =>
+      prev.titulo === removido.nome
+        ? { ...prev, titulo: "", horaInicio: "", horaFim: "" }
+        : prev,
+    );
+    aplicarEspacos(await carregarEspacos());
+  };
 
   // Síndico enxerga o histórico; morador só vê de hoje em diante.
   const podeVerPassado = user === "sindico";
@@ -498,9 +692,12 @@ export default function App() {
     setMesVisivel({ ano: Math.floor(indice / 12), mes: indice % 12 });
   };
 
-  const abrirReserva = (chave: string) => {
+    const abrirReserva = (chave: string) => {
     setDataReserva(dataDaChave(chave));
+    setNovaReserva({ titulo: "", detalhes: "", horaInicio: "", horaFim: "" });
     setShowNovaReserva(true);
+    // Recarrega as reservas para a checagem de conflito usar o estado mais recente.
+    carregarEventos().then(aplicarEventos);
   };
 
   // Botão "Reservar": usa hoje se estiver no mês atual, senão o dia 1 do mês exibido.
@@ -519,7 +716,7 @@ export default function App() {
   // --- FUNÇÃO QUE SALVA A RESERVA ---
   const [salvandoReserva, setSalvandoReserva] = useState<boolean>(false);
 
-  const solicitarReserva = async () => {
+ const solicitarReserva = async () => {
     if (salvandoReserva) return;
     if (
       !novaReserva.titulo ||
@@ -537,13 +734,8 @@ export default function App() {
       );
     }
 
-    const timeToMins = (time: string) => {
-      const [h, m] = time.split(":").map(Number);
-      return h * 60 + m;
-    };
-
-    const startMins = timeToMins(novaReserva.horaInicio);
-    const endMins = timeToMins(novaReserva.horaFim);
+    const startMins = minutosDaHora(novaReserva.horaInicio);
+    const endMins = minutosDaHora(novaReserva.horaFim);
 
     if (startMins >= endMins) {
       return mostrarAlerta(
@@ -553,41 +745,25 @@ export default function App() {
     }
 
     if (chaveReserva === hojeChave) {
-      const agora = new Date();
-      if (startMins <= agora.getHours() * 60 + agora.getMinutes()) {
+      if (semHorarioHoje || startMins < minutosMinimosHoje) {
         return mostrarAlerta(
           "Atenção",
-          "A hora inicial de uma reserva para hoje deve ser futura.",
+          semHorarioHoje
+            ? "Já não há horários disponíveis para reservar hoje."
+            : `Para hoje, escolha um horário a partir de ${horaMinimaHoje}.`,
         );
       }
     }
 
-    // Verifica Conflitos
-    const temConflito = eventos.some((ev) => {
-      if (
-        ev.tipo !== "reserva" ||
-        ev.data !== chaveReserva ||
-        ev.titulo !== novaReserva.titulo
-      )
-        return false;
-      if (ev.horaInicio && ev.horaFim) {
-        return (
-          startMins < timeToMins(ev.horaFim) &&
-          endMins > timeToMins(ev.horaInicio)
-        );
-      }
-      return false;
-    });
-
-    if (temConflito) {
+    // A checagem acima é só um aviso rápido; duas pessoas reservando ao mesmo tempo
+    // só são separadas pela constraint de conflito do banco.
+    if (reservaEmConflito(novaReserva.horaInicio, novaReserva.horaFim)) {
       return mostrarAlerta(
         "Indisponível",
         "Este espaço já está reservado para este horário neste dia.",
       );
     }
 
-    // O banco decide: a checagem acima é só um aviso rápido (duas pessoas reservando ao
-    // mesmo tempo só são separadas pela constraint de conflito do banco).
     setSalvandoReserva(true);
     const erro = await criarReserva({
       data: chaveReserva,
@@ -939,7 +1115,17 @@ export default function App() {
               Condo<Text style={{ color: "#818cf8" }}>Owl</Text>
             </Text>
           </TouchableOpacity>
-          <View style={styles.row}>
+                    <View style={styles.row}>
+            <TouchableOpacity
+              onPress={() => {
+                animate();
+                setAjustesVisivel(true);
+              }}
+              style={styles.iconBtn}
+              accessibilityLabel="Abrir ajustes"
+            >
+              <Feather name="settings" size={20} color={theme.textMuted} />
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => {
                 animate();
@@ -1021,6 +1207,7 @@ export default function App() {
                   {erroComunicados}
                 </Text>
               )}
+
               {erroComunicados === "" && comunicados.length === 0 && (
                 <Text style={{ color: theme.textMuted, marginBottom: 12 }}>
                   Nenhum comunicado publicado ainda.
@@ -1576,19 +1763,17 @@ export default function App() {
               ))}
             </View>
           )}
-          {/* === ECRÃ DE APROVAÇÕES (Apenas Síndico) === */}
-          {/* Fica dentro do mesmo ScrollView para rolar em telas pequenas */}
-          {activeTab === "aprovacoes" && user === "sindico" && (
+          
+                    {/* === ABA: GESTÃO (Apenas Síndico) === */}
+          {activeTab === "gestao" && user === "sindico" && (
             <View style={{ paddingTop: 10 }}>
-              <Text
-                style={{
-                  fontSize: 24,
-                  fontWeight: "bold",
-                  color: theme.text,
-                  marginBottom: 20,
-                }}
-              >
-                Aprovar Moradores
+              <Text style={[styles.pageTitle, { color: theme.text, marginBottom: 24 }]}>
+                Gestão
+              </Text>
+
+              {/* --- SECÇÃO: APROVAÇÕES PENDENTES --- */}
+              <Text style={[styles.pageTitle, { color: theme.text, fontSize: 20, marginBottom: 12 }]}>
+                Aprovações Pendentes
               </Text>
 
               {erroPendentes !== "" && (
@@ -1602,7 +1787,7 @@ export default function App() {
                   style={{
                     color: theme.textMuted,
                     textAlign: "center",
-                    marginTop: 20,
+                    marginBottom: 24,
                   }}
                 >
                   Nenhum morador a aguardar aprovação.
@@ -1616,48 +1801,20 @@ export default function App() {
                       {
                         backgroundColor: theme.card,
                         borderColor: theme.border,
-                        marginBottom: 12,
+                        marginBottom: 16,
                       },
                     ]}
                   >
-                    <Text
-                      style={{
-                        color: theme.text,
-                        fontWeight: "bold",
-                        fontSize: 18,
-                        marginBottom: 4,
-                      }}
-                    >
+                    <Text style={{ color: theme.text, fontWeight: "bold", fontSize: 18, marginBottom: 4 }}>
                       {morador.nome_completo || "Nome não informado"}
                     </Text>
-
-                    <Text
-                      style={{
-                        color: theme.textMuted,
-                        fontSize: 14,
-                        marginBottom: 2,
-                      }}
-                    >
+                    <Text style={{ color: theme.textMuted, fontSize: 14, marginBottom: 2 }}>
                       E-mail: {morador.email}
                     </Text>
-
-                    <Text
-                      style={{
-                        color: theme.textMuted,
-                        fontSize: 14,
-                        marginBottom: 2,
-                      }}
-                    >
+                    <Text style={{ color: theme.textMuted, fontSize: 14, marginBottom: 2 }}>
                       Nascimento: {morador.data_nascimento || "Não informada"}
                     </Text>
-
-                    <Text
-                      style={{
-                        color: theme.textMuted,
-                        fontSize: 14,
-                        marginBottom: 16,
-                      }}
-                    >
+                    <Text style={{ color: theme.textMuted, fontSize: 14, marginBottom: 16 }}>
                       Unidade: {morador.unidade}
                     </Text>
 
@@ -1678,38 +1835,10 @@ export default function App() {
                   </View>
                 ))
               )}
-            </View>
-          )}
-          {/* === ABA: CONFIGURAÇÕES === */}
-          {activeTab === "configuracoes" && (
-            <View
-              style={{
-                flex: 1,
-                paddingTop: 20,
-                paddingBottom: 100,
-                paddingHorizontal: 4,
-              }}
-            >
-              <Text
-                style={[
-                  styles.pageTitle,
-                  { color: theme.text, marginBottom: 20 },
-                ]}
-              >
-                Configurações
-              </Text>
 
-              <Text
-                style={{
-                  color: theme.textMuted,
-                  fontSize: 14,
-                  fontWeight: "bold",
-                  textTransform: "uppercase",
-                  marginBottom: 12,
-                  marginLeft: 4,
-                }}
-              >
-                Notificações Push
+              {/* --- SECÇÃO: ESPAÇOS DE RESERVA --- */}
+              <Text style={[styles.pageTitle, { color: theme.text, fontSize: 20, marginBottom: 12, marginTop: 24 }]}>
+                Espaços de Reserva
               </Text>
 
               <View
@@ -1726,96 +1855,54 @@ export default function App() {
                   style={{
                     color: theme.textMuted,
                     fontSize: 13,
-                    marginBottom: 16,
+                    marginBottom: 12,
                     lineHeight: 20,
                   }}
                 >
-                  Escolha os tipos de comunicados opcionais que deseja receber
-                  no seu telemóvel. Avisos urgentes e de reuniões são sempre
-                  enviados.
+                  Estes são os espaços disponíveis no calendário. Remover um
+                  espaço não apaga as reservas já feitas.
                 </Text>
 
-                {/* Switch Manutenção */}
-                <View
-                  style={[
-                    styles.rowBetween,
-                    {
-                      marginBottom: 16,
-                      borderBottomWidth: 1,
-                      borderBottomColor: theme.border,
-                      paddingBottom: 16,
-                    },
-                  ]}
-                >
-                  <View style={styles.row}>
-                    <View
-                      style={[
-                        styles.tag,
-                        {
-                          backgroundColor: theme.warning + "1A",
-                          marginRight: 12,
-                        },
-                      ]}
-                    >
-                      <Ionicons
-                        name="build-outline"
-                        size={16}
-                        color={theme.warning}
-                      />
-                    </View>
-                    <View>
-                      <Text
-                        style={{
-                          color: theme.text,
-                          fontSize: 16,
-                          fontWeight: "bold",
-                        }}
-                      >
-                        Manutenção
-                      </Text>
-                      <Text
-                        style={{
-                          color: theme.textMuted,
-                          fontSize: 12,
-                          marginTop: 2,
-                        }}
-                      >
-                        Obras, limpeza e reparações
-                      </Text>
-                    </View>
-                  </View>
-                  <Switch
-                    trackColor={{
-                      false: theme.border,
-                      true: theme.primary[0],
-                    }}
-                    thumbColor={"#FFF"}
-                    onValueChange={(valor) =>
-                      alternarPreferencia("manutencao", valor)
-                    }
-                    value={prefsNotificacoes.manutencao}
-                  />
-                </View>
+                {erroEspacos !== "" && (
+                  <Text style={{ color: theme.danger, marginBottom: 12 }}>
+                    {erroEspacos}
+                  </Text>
+                )}
 
-                {/* Switch Social */}
-                <View style={styles.rowBetween}>
-                  <View style={styles.row}>
-                    <View
-                      style={[
-                        styles.tag,
-                        {
-                          backgroundColor: theme.success + "1A",
-                          marginRight: 12,
-                        },
-                      ]}
-                    >
-                      <Ionicons
-                        name="cafe-outline"
-                        size={16}
-                        color={theme.success}
-                      />
-                    </View>
-                    <View>
+                {erroEspacos === "" && espacos.length === 0 && (
+                  <Text style={{ color: theme.textMuted, marginBottom: 12 }}>
+                    Nenhum espaço cadastrado ainda.
+                  </Text>
+                )}
+
+                {espacos.map((espaco) => (
+                  <View
+                    key={espaco.id}
+                    style={[
+                      styles.rowBetween,
+                      {
+                        borderBottomWidth: 1,
+                        borderBottomColor: theme.border,
+                        paddingVertical: 12,
+                      },
+                    ]}
+                  >
+                    <View style={styles.row}>
+                      <View
+                        style={[
+                          styles.tag,
+                          {
+                            backgroundColor: theme.primary[0] + "1A",
+                            marginRight: 12,
+                          },
+                        ]}
+                      >
+                        <Feather
+                          name="map-pin"
+                          size={16}
+                          color={theme.primary[0]}
+                        />
+                      </View>
                       <Text
                         style={{
                           color: theme.text,
@@ -1823,30 +1910,67 @@ export default function App() {
                           fontWeight: "bold",
                         }}
                       >
-                        Social
-                      </Text>
-                      <Text
-                        style={{
-                          color: theme.textMuted,
-                          fontSize: 12,
-                          marginTop: 2,
-                        }}
-                      >
-                        Eventos e confraternizações
+                        {espaco.nome}
                       </Text>
                     </View>
+                    <TouchableOpacity
+                      onPress={() => setEspacoParaRemover(espaco)}
+                      style={{ padding: 8 }}
+                      accessibilityLabel={`Remover ${espaco.nome}`}
+                    >
+                      <Feather name="trash-2" size={18} color={theme.danger} />
+                    </TouchableOpacity>
                   </View>
-                  <Switch
-                    trackColor={{
-                      false: theme.border,
-                      true: theme.primary[0],
+                ))}
+
+                <View style={{ marginTop: 16 }}>
+                  <TextInput
+                    style={[
+                      styles.input,
+                      {
+                        color: theme.text,
+                        borderColor: theme.border,
+                        backgroundColor: theme.bg,
+                        marginBottom: 8,
+                      },
+                    ]}
+                    placeholder="Nome do novo espaço"
+                    placeholderTextColor={theme.textMuted}
+                    maxLength={LIMITE.espaco}
+                    value={novoEspaco}
+                    onChangeText={(t) => {
+                      setNovoEspaco(t);
+                      setErroNovoEspaco("");
                     }}
-                    thumbColor={"#FFF"}
-                    onValueChange={(valor) =>
-                      alternarPreferencia("social", valor)
-                    }
-                    value={prefsNotificacoes.social}
                   />
+                  {erroNovoEspaco !== "" && (
+                    <Text style={{ color: theme.danger, marginBottom: 8 }}>
+                      {erroNovoEspaco}
+                    </Text>
+                  )}
+                  <TouchableOpacity
+                    disabled={salvandoEspaco || novoEspaco.trim() === ""}
+                    onPress={adicionarEspaco}
+                    style={{
+                      opacity:
+                        salvandoEspaco || novoEspaco.trim() === "" ? 0.6 : 1,
+                    }}
+                  >
+                    <LinearGradient
+                      colors={theme.primary as [string, string]}
+                      style={styles.btnGradient}
+                    >
+                      <Feather
+                        name="plus"
+                        size={18}
+                        color="#FFF"
+                        style={{ marginRight: 8 }}
+                      />
+                      <Text style={styles.btnText}>
+                        {salvandoEspaco ? "A guardar..." : "Adicionar espaço"}
+                      </Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
                 </View>
               </View>
             </View>
@@ -1874,15 +1998,16 @@ export default function App() {
               { borderColor: theme.border, width: "100%", maxWidth: 560 },
             ]}
           >
-            {(
+                        {(
               [
                 { id: "feed", icon: "home", label: "Mural" },
                 { id: "calendario", icon: "calendar", label: "Agenda" },
                 { id: "atas", icon: "book-open", label: "Atas" },
                 ...(user === "sindico"
-                  ? [{ id: "aprovacoes", icon: "user-check", label: "Aprovar" }]
+                  ? [
+                      { id: "gestao", icon: "briefcase", label: "Gestão" },
+                    ]
                   : []),
-                { id: "configuracoes", icon: "sliders", label: "Ajustes" },
               ] as {
                 id: string;
                 icon: keyof typeof Feather.glyphMap;
@@ -1941,6 +2066,150 @@ export default function App() {
             )}
           </BlurView>
         </View>
+        {/* MENU LATERAL DE AJUSTES */}
+        <MenuLateral
+          visivel={ajustesVisivel}
+          titulo="Ajustes"
+          aoFechar={() => setAjustesVisivel(false)}
+          cores={theme}
+        >
+          <SecaoRetratil
+            titulo="Configurações de alerta"
+            icone="bell"
+            cores={theme}
+            abertoInicialmente
+          >
+            <SecaoRetratil
+              titulo="Alertas"
+              icone="bell"
+              cores={theme}
+              abertoInicialmente
+            >
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  fontSize: 13,
+                  marginBottom: 16,
+                  lineHeight: 20,
+                }}
+              >
+                Escolha os tipos de comunicados opcionais que deseja receber no
+                seu telemóvel. Avisos urgentes e de reuniões são sempre enviados.
+              </Text>
+
+              <View
+                style={[
+                  styles.rowBetween,
+                  {
+                    marginBottom: 16,
+                    borderBottomWidth: 1,
+                    borderBottomColor: theme.border,
+                    paddingBottom: 16,
+                  },
+                ]}
+              >
+                <View style={styles.row}>
+                  <View
+                    style={[
+                      styles.tag,
+                      {
+                        backgroundColor: theme.warning + "1A",
+                        marginRight: 12,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="build-outline"
+                      size={16}
+                      color={theme.warning}
+                    />
+                  </View>
+                  <View>
+                    <Text
+                      style={{
+                        color: theme.text,
+                        fontSize: 16,
+                        fontWeight: "bold",
+                      }}
+                    >
+                      Manutenção
+                    </Text>
+                    <Text
+                      style={{
+                        color: theme.textMuted,
+                        fontSize: 12,
+                        marginTop: 2,
+                      }}
+                    >
+                      Obras, limpeza e reparações
+                    </Text>
+                  </View>
+                </View>
+                <Switch
+                  trackColor={{
+                    false: theme.border,
+                    true: theme.primary[0],
+                  }}
+                  thumbColor={"#FFF"}
+                  onValueChange={(valor) =>
+                    alternarPreferencia("manutencao", valor)
+                  }
+                  value={prefsNotificacoes.manutencao}
+                />
+              </View>
+
+              <View style={styles.rowBetween}>
+                <View style={styles.row}>
+                  <View
+                    style={[
+                      styles.tag,
+                      {
+                        backgroundColor: theme.success + "1A",
+                        marginRight: 12,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="cafe-outline"
+                      size={16}
+                      color={theme.success}
+                    />
+                  </View>
+                  <View>
+                    <Text
+                      style={{
+                        color: theme.text,
+                        fontSize: 16,
+                        fontWeight: "bold",
+                      }}
+                    >
+                      Social
+                    </Text>
+                    <Text
+                      style={{
+                        color: theme.textMuted,
+                        fontSize: 12,
+                        marginTop: 2,
+                      }}
+                    >
+                      Eventos e confraternizações
+                    </Text>
+                  </View>
+                </View>
+                <Switch
+                  trackColor={{
+                    false: theme.border,
+                    true: theme.primary[0],
+                  }}
+                  thumbColor={"#FFF"}
+                  onValueChange={(valor) => alternarPreferencia("social", valor)}
+                  value={prefsNotificacoes.social}
+                />
+              </View>
+            </SecaoRetratil>
+          </SecaoRetratil>
+        </MenuLateral>
+        
 
         {/* ========================================== */}
         {/* MODAIS COM BLUR (GLASSMORPHISM) E ALERTA GLOBAL */}
@@ -2655,12 +2924,12 @@ export default function App() {
               >
                 Data da Reserva
               </Text>
-              <DateTimeField
+                <DateTimeField
                 mode="date"
                 label="Data da reserva"
                 value={dataReserva}
                 minimumDate={hoje}
-                onChange={setDataReserva}
+                onChange={aoMudarDataReserva}
                 isDark={isDark}
                 colors={theme}
               />
@@ -2684,41 +2953,69 @@ export default function App() {
                   marginBottom: 15,
                 }}
               >
-                {["Salão de Festas", "Churrasqueira", "Piscina"].map(
-                  (espaco) => (
-                    <TouchableOpacity
-                      key={espaco}
-                      onPress={() =>
-                        setNovaReserva({ ...novaReserva, titulo: espaco })
-                      }
+                                {erroEspacos !== "" && (
+                  <Text
+                    style={{
+                      color: theme.danger,
+                      marginBottom: 12,
+                      fontSize: 13,
+                    }}
+                  >
+                    {erroEspacos}
+                  </Text>
+                )}
+                {erroEspacos === "" && espacos.length === 0 && (
+                  <Text
+                    style={{
+                      color: theme.textMuted,
+                      marginBottom: 12,
+                      fontSize: 13,
+                    }}
+                  >
+                    Nenhum espaço disponível para reserva. Fale com o síndico.
+                  </Text>
+                )}
+                {espacos.map((espaco) => (
+                  <TouchableOpacity
+                    key={espaco.id}
+                    onPress={() => {
+                      // Trocar o espaço invalida os horários escolhidos.
+                      setNovaReserva((prev) => ({
+                        ...prev,
+                        titulo: espaco.nome,
+                        horaInicio: "",
+                        horaFim: "",
+                      }));
+                    }}
+                    style={{
+                      paddingVertical: 8,
+                      paddingHorizontal: 12,
+                      borderRadius: 8,
+                      backgroundColor:
+                        novaReserva.titulo === espaco.nome
+                          ? theme.primary[0]
+                          : theme.bg,
+                      borderWidth: 1,
+                      borderColor:
+                        novaReserva.titulo === espaco.nome
+                          ? theme.primary[0]
+                          : theme.border,
+                    }}
+                  >
+                    <Text
                       style={{
-                        paddingVertical: 8,
-                        paddingHorizontal: 12,
-                        borderRadius: 8,
-                        backgroundColor:
-                          novaReserva.titulo === espaco
-                            ? theme.primary[0]
-                            : theme.bg,
-                        borderWidth: 1,
-                        borderColor:
-                          novaReserva.titulo === espaco
-                            ? theme.primary[0]
-                            : theme.border,
+                        color:
+                          novaReserva.titulo === espaco.nome
+                            ? "#FFF"
+                            : theme.text,
+                        fontSize: 13,
+                        fontWeight: "bold",
                       }}
                     >
-                      <Text
-                        style={{
-                          color:
-                            novaReserva.titulo === espaco ? "#FFF" : theme.text,
-                          fontSize: 13,
-                          fontWeight: "bold",
-                        }}
-                      >
-                        {espaco}
-                      </Text>
-                    </TouchableOpacity>
-                  ),
-                )}
+                      {espaco.nome}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
 
               {/* SELEÇÃO DE HORÁRIOS */}
@@ -2742,11 +3039,11 @@ export default function App() {
                         ? horaParaData(novaReserva.horaInicio)
                         : null
                     }
-                    onChange={(d) =>
-                      setNovaReserva((prev) => ({
-                        ...prev,
-                        horaInicio: formatarHora(d),
-                      }))
+                    onChange={escolherHoraInicio}
+                    minimumTime={
+                      chaveData(dataReserva) === hojeChave
+                        ? horaMinimaHoje
+                        : undefined
                     }
                     isDark={isDark}
                     colors={theme}
@@ -2772,11 +3069,13 @@ export default function App() {
                         ? horaParaData(novaReserva.horaFim)
                         : null
                     }
-                    onChange={(d) =>
-                      setNovaReserva((prev) => ({
-                        ...prev,
-                        horaFim: formatarHora(d),
-                      }))
+                    onChange={escolherHoraFim}
+                    minimumTime={
+                      novaReserva.horaInicio
+                        ? novaReserva.horaInicio
+                        : chaveData(dataReserva) === hojeChave
+                          ? horaMinimaHoje
+                          : undefined
                     }
                     isDark={isDark}
                     colors={theme}
@@ -2839,6 +3138,75 @@ export default function App() {
               </View>
             </View>
           </ModalOverlay>
+        </Modal>
+
+        {/* Modal: Remover espaço de reserva */}
+        <Modal
+          visible={!!espacoParaRemover}
+          transparent
+          animationType="fade"
+          supportedOrientations={ORIENTACOES}
+          onRequestClose={() => setEspacoParaRemover(null)}
+        >
+          <View style={styles.modalOverlay}>
+            <View
+              style={[
+                styles.modalCaixa,
+                { backgroundColor: theme.card, borderColor: theme.border },
+              ]}
+            >
+              <MaterialCommunityIcons
+                name="trash-can-outline"
+                size={56}
+                color={theme.danger}
+                style={{ marginBottom: 16 }}
+              />
+              <Text style={[styles.modalTitulo, { color: theme.text }]}>
+                Remover espaço
+              </Text>
+              <Text style={[styles.modalMensagem, { color: theme.textMuted }]}>
+                Remover &quot;{espacoParaRemover?.nome}&quot;? As reservas já
+                feitas continuam no calendário.
+              </Text>
+              <View style={styles.row}>
+                <TouchableOpacity
+                  style={[
+                    styles.btnOutline,
+                    {
+                      borderColor: theme.border,
+                      flex: 1,
+                      marginRight: 6,
+                    },
+                  ]}
+                  onPress={() => setEspacoParaRemover(null)}
+                >
+                  <Text style={{ color: theme.text, fontWeight: "700" }}>
+                    Cancelar
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{
+                    flex: 1,
+                    marginLeft: 6,
+                    opacity: removendoEspaco ? 0.6 : 1,
+                  }}
+                  disabled={removendoEspaco}
+                  onPress={confirmarRemocaoEspaco}
+                >
+                  <View
+                    style={[
+                      styles.btnGradient,
+                      { backgroundColor: theme.danger },
+                    ]}
+                  >
+                    <Text style={styles.btnText}>
+                      {removendoEspaco ? "A remover..." : "Remover"}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
         </Modal>
       </View>
     </SafeAreaView>
