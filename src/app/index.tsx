@@ -1,4 +1,10 @@
-import { solicitarPermissaoNotificacao } from "@/utils/notificacoes";
+import {
+  estadoNotificacao,
+  removerRegistroNotificacao,
+  sincronizarNotificacao,
+  solicitarPermissaoNotificacao,
+  type EstadoNotificacao,
+} from "@/utils/notificacoes";
 import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Session } from "@supabase/supabase-js";
 import { BlurView } from "expo-blur";
@@ -10,6 +16,7 @@ import {
   LayoutAnimation,
   Linking,
   Modal,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -380,6 +387,8 @@ export default function App() {
 
   // --- FUNÇÃO OFICIAL DE LOGOUT ---
   const fazerLogout = async () => {
+    // Antes do signOut: o delete do registro do aparelho precisa da sessão.
+    if (uidLogado) await removerRegistroNotificacao(uidLogado);
     const { error } = await supabase.auth.signOut();
     if (error) {
       mostrarAlerta("Erro ao sair", error.message);
@@ -418,13 +427,22 @@ export default function App() {
   };
   // Carrega quando há sessão liberada (morador pendente não passa do RLS).
   const uidLogado = session?.user.id;
-  const notificacaoPendente =
-    typeof Notification !== "undefined" && Notification.permission === "default";
+  // Estado em useState (e não lido a cada render) para o cartão do Mural sumir
+  // ou mudar de texto assim que o navegador responde ao pedido de permissão.
+  const [estadoNotif, setEstadoNotif] = useState<EstadoNotificacao>(
+    estadoNotificacao,
+  );
+
+  // Permissão concedida mas token não gravado: o cartão continua para a pessoa
+  // tentar de novo, em vez de sumir e deixar o aparelho sem receber nada.
+  const [falhaRegistro, setFalhaRegistro] = useState<boolean>(false);
 
   const habilitarNotificacoes = async () => {
     if (!uidLogado) return;
 
     const erro = await solicitarPermissaoNotificacao(uidLogado);
+    setEstadoNotif(estadoNotificacao());
+    setFalhaRegistro(erro !== null && estadoNotificacao() === "concedida");
     if (erro) mostrarAlerta("Notificações", erro);
   };
 
@@ -434,6 +452,9 @@ export default function App() {
     carregarComunicados().then(aplicarComunicados);
 
     carregarPreferencias(uidLogado);
+
+    // Permissão já concedida: garante o token deste aparelho sem novo prompt.
+    void sincronizarNotificacao(uidLogado);
   }, [uidLogado, isPending]);
 
   // Eventos/reservas, atas e sugestões vêm do banco (tabelas eventos, atas e sugestoes;
@@ -977,6 +998,7 @@ export default function App() {
             <TouchableOpacity
               onPress={async () => {
                 animate();
+                if (uidLogado) await removerRegistroNotificacao(uidLogado);
                 await supabase.auth.signOut();
               }}
               style={styles.iconBtn}
@@ -1037,7 +1059,10 @@ export default function App() {
                 )}
               </View>
 
-              {notificacaoPendente && (
+              {(estadoNotif === "pendente" ||
+                estadoNotif === "negada" ||
+                falhaRegistro ||
+                (estadoNotif === "nao-suportado" && Platform.OS === "web")) && (
                 <View
                   style={[
                     styles.card,
@@ -1060,24 +1085,31 @@ export default function App() {
                       lineHeight: 20,
                     }}
                   >
-                    Toque abaixo para permitir notificações neste aparelho. No
-                    iPhone ou iPad, abra o PWA pelo ícone adicionado à Tela de
-                    Início.
+                    {estadoNotif === "concedida" &&
+                      "A permissão foi concedida, mas não foi possível registrar este aparelho para receber avisos. Toque abaixo para tentar de novo."}
+                    {estadoNotif === "pendente" &&
+                      "Toque abaixo para permitir notificações neste aparelho. No iPhone ou iPad, abra o PWA pelo ícone adicionado à Tela de Início."}
+                    {estadoNotif === "negada" &&
+                      "As notificações estão bloqueadas para este app. Libere nas configurações do navegador (ou do aparelho, para o app instalado) e toque abaixo para ativar."}
+                    {estadoNotif === "nao-suportado" &&
+                      "Este navegador não recebe notificações. No iPhone ou iPad, toque em Compartilhar, escolha Adicionar à Tela de Início e abra o app pelo ícone."}
                   </Text>
-                  <TouchableOpacity
-                    onPress={() => void habilitarNotificacoes()}
-                    style={{
-                      alignSelf: "flex-start",
-                      paddingVertical: 10,
-                      paddingHorizontal: 14,
-                      borderRadius: 10,
-                      backgroundColor: theme.primary[0],
-                    }}
-                  >
-                    <Text style={{ color: "#FFF", fontWeight: "bold" }}>
-                      Ativar notificações
-                    </Text>
-                  </TouchableOpacity>
+                  {estadoNotif !== "nao-suportado" && (
+                    <TouchableOpacity
+                      onPress={() => void habilitarNotificacoes()}
+                      style={{
+                        alignSelf: "flex-start",
+                        paddingVertical: 10,
+                        paddingHorizontal: 14,
+                        borderRadius: 10,
+                        backgroundColor: theme.primary[0],
+                      }}
+                    >
+                      <Text style={{ color: "#FFF", fontWeight: "bold" }}>
+                        Ativar notificações
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               )}
 
