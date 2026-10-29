@@ -117,6 +117,30 @@ Padrão rígido, mantenha:
   migrações e são usados em `maxLength` no app.
 - `trim()` em todo texto antes de gravar.
 
+### Banco como contrato do código
+
+- Antes de usar uma tabela, coluna, RPC ou policy no app ou numa Edge Function,
+  confirme que ela existe nas migrações versionadas e confira tipo, nulabilidade,
+  default, grants e RLS. O fato de funcionar no banco atual não prova que o
+  esquema está registrado no repositório.
+- Cada mudança de esquema acompanha o código numa migração nova. Não dependa de
+  uma alteração manual feita no painel de produção como única definição do banco.
+- Ao encontrar uma coluna criada manualmente, não a ignore nem conclua que a
+  migração já foi aplicada: registre a definição desejada numa migração que também
+  reconcilie o estado existente com segurança, preservando os dados válidos.
+- Ao validar gravações protegidas por RLS, confira tanto o grant da coluna quanto
+  a policy da linha. `UPDATE` sem erro não prova que uma linha foi alterada.
+- Token push pertence à instalação/aparelho, não à criação da conta. Solicite
+  permissão em ação explícita após login, armazene tokens por dispositivo e
+  mantenha separados os provedores web e nativos quando seus formatos diferirem.
+- O app é um PWA. Para iOS/iPadOS, push web requer iOS/iPadOS 16.4 ou mais novo,
+  instalação na Tela de Início e pedido de permissão em resposta a um toque. Em
+  navegadores sem suporte ao Push API, informe a limitação em vez de tentar obter
+  token como se o fluxo nativo estivesse instalado.
+- Chame `Notification.requestPermission()` diretamente durante o callback do
+  toque que iniciou a inscrição, antes de `await`, imports dinâmicos ou chamadas
+  de rede. O navegador pode recusar o prompt quando o gesto do usuário já expirou.
+
 ## Ambiente (nada hardcoded)
 
 - **Nenhum valor configurável pode ficar hardcoded no código.** Toda
@@ -143,6 +167,10 @@ Padrão rígido, mantenha:
 - **Leitura de `.env` só em módulo de configuração** (`src/supabase.ts`,
   `src/utils/notificacoes.ts`). Tela e componente não leem `process.env`
   diretamente.
+- Expo substitui `EXPO_PUBLIC_*` durante a compilação. `.env` local não configura
+  automaticamente o PWA hospedado: o ambiente que gera a publicação também precisa
+  receber as variáveis necessárias, e a saída publicada deve ser conferida antes
+  do deploy. Não confunda configuração ausente no bundle com falha do serviço.
 - **Segredo que não pode ser público não existe no cliente.** A chave
   `anon` e a config web do Firebase são públicas por desenho; para qualquer
   outra credencial, a resposta é banco (função/gatilho/RLS), não `.env`.

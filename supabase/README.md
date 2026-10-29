@@ -26,6 +26,9 @@ ambiente local com `supabase start`). Elas são ordenadas e cada uma tem um assu
 | `0012_validar_codigo_condominio` | `validar_codigo_condominio(codigo_informado)`: sim/não para a tela de código, com `anon`; o cadastro passa a exigir código de condomínio existente e grava `perfis.condominio_id` |
 | `0013_usuario_pertence_ao_condominio` | `usuario_pertence_ao_condominio(codigo_informado)`: sim/não se o usuário logado pertence ao condomínio do código; associa contas antigas sem condomínio quando só existe um |
 | `0014_tipo_usuario` | tabela `tipo_usuario` (síndico, morador), `perfis.tipo_usuario_id` espelhando `app_metadata` por gatilho e `usuario_e_do_tipo(tipo_informado)` para o login |
+| `0015_notificacoes_push` | token FCM e preferências em `perfis`; concede ao usuário atualização somente dessas colunas, sujeita à policy de próprio perfil |
+| `0016_dispositivos_notificacao` | tokens por instalação do PWA, RLS por usuário e migração dos tokens web legados |
+| `0017_gatilho_notificar_comunicado` | gatilho `comunicados_notificar` (pg_net) que chama a Edge Function `notificar-comunicados` a cada comunicado publicado; URL e segredo da função vêm do Vault |
 
 Aplicar em ordem. Para dados de teste, `seeds/dev_usuarios_colinas_de_roma.sql` (não é migração; nunca em produção) cria 1 síndico e 2 moradores no condomínio, com senhas geradas na hora e mostradas só uma vez. Nada foi executado em Supabase real: foram validadas num Postgres
 descartável (Docker) com um `auth` simulado. Depois de aplicar, definir o código de
@@ -197,6 +200,27 @@ a lista de moradores." Os dados pessoais não vão para o console.
 - Site URL e Redirect URLs só do domínio do PWA.
 - Login anônimo desligado; confirmação de e-mail mantida ligada.
 
+### Ligar o push de comunicados em um projeto (sequência de liberação)
+
+Ordem para outro servidor/projeto Supabase; nada disto roda sem decisão de quem aplica.
+
+1. Secrets da função (`supabase secrets set`): `FIREBASE_SERVICE_ACCOUNT` (JSON da conta
+   de serviço do projeto Firebase) e `NOTIFICAR_WEBHOOK_SECRET` (valor longo e aleatório,
+   novo). `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` já vêm do ambiente.
+2. Publicar a função: `supabase functions deploy notificar-comunicados` (o
+   `verify_jwt = false` vem do `config.toml`).
+3. Vault do banco, no SQL Editor (mesmo valor do passo 1 no segundo secret):
+   `select vault.create_secret('https://<ref>.supabase.co/functions/v1/notificar-comunicados', 'notificar_comunicados_url');`
+   `select vault.create_secret('<NOTIFICAR_WEBHOOK_SECRET>', 'notificar_comunicados_segredo');`
+4. Aplicar a migração `0017` no SQL Editor.
+5. **Remover o Database Webhook antigo do painel** (Database > Webhooks), se existir; com
+   os dois ativos cada comunicado notificaria em dobro.
+6. Rodar `scripts/validar_notificacoes.sql` (tudo `OK`) e publicar um comunicado de teste.
+   O resultado do disparo fica em `net._http_response` (o pg_net apaga após ~6 h; 200 com `disparos`, `falhas` e
+   `falhasPorCodigo`).
+7. No PWA publicado, as variáveis `EXPO_PUBLIC_FIREBASE_*` (inclusive a VAPID) precisam
+   estar no ambiente de build; sem elas o app avisa quais faltam ao tocar em ativar.
+
 ## Banco: tabelas e por que são assim
 
 As migrações criam o esquema que o app usa. **Ligados ao app:** comunicados (listar, publicar
@@ -205,7 +229,8 @@ cadastrar). Todas as tabelas têm RLS ligado; sem policy, a chave anônima não 
 
 | Tabela | Quem lê | Quem escreve |
 |--------|---------|--------------|
-| `perfis` (nome, nascimento, celular, unidade, e-mail) | o próprio usuário; síndico lê todos | o usuário altera só nome e celular; criada por gatilho no cadastro |
+| `perfis` (nome, nascimento, celular, unidade, e-mail e preferências push) | o próprio usuário; síndico lê todos | o usuário altera nome, celular e preferências; criada por gatilho no cadastro |
+| `dispositivos_notificacao` | só o dono dos tokens | o usuário registra e remove seus dispositivos; múltiplos por perfil |
 | `condominios` (nome, código) | síndico e moradores aprovados | só síndico; código único, em minúsculas |
 | `comunicados` / `comunicados_vistos` | síndico e moradores aprovados | só síndico publica; cada um registra o seu "visto" |
 | `eventos` (inclui reservas) | síndico e moradores aprovados | síndico cria qualquer um; morador aprovado só reserva em seu nome, de hoje em diante |
@@ -304,6 +329,25 @@ Decisões:
   do Supabase (bucket, policies e limite de tamanho), que ainda não existe.
 - **Listas recarregam ao entrar na aba** (calendário, atas e sugestões), para ver o que os
   outros fizeram. Não há atualização em tempo real.
+- **Push de comunicado nasce de um gatilho versionado (0017), não de webhook do painel.**
+  A Edge Function `notificar-comunicados` existia, mas nada no repositório a chamava: o
+  disparo dependia de um Database Webhook criado à mão, que o painel configura com a chave
+  anon, enquanto a função exigia `service_role` e respondia 401. O síndico publicava e
+  ninguém era notificado. O gatilho `AFTER INSERT` em `comunicados` usa `pg_net`
+  (assíncrono, pós-commit): não atrasa nem derruba a publicação, e qualquer falha vira
+  `WARNING` em vez de erro no `INSERT`. A função autentica por segredo compartilhado
+  (`NOTIFICAR_WEBHOOK_SECRET`, comparado em tempo constante) com `verify_jwt = false`, por
+  não depender do formato da chave de serviço do projeto. Ela só envia a tokens `web`,
+  devolve falhas por código do FCM (visíveis em `net._http_response`) e apaga tokens que o
+  FCM declara inexistentes.
+- **O aparelho reregistra o token sozinho após o login** quando a permissão já foi
+  concedida (`sincronizarNotificacao`). O cartão "Ativar notificações" some depois da
+  concessão; sem o reregistro, quem concedeu antes da configuração do Firebase estar
+  publicada, ou teve o token renovado pelo FCM, ficava para sempre sem receber nada. O
+  pedido de permissão continua só por toque (regra do navegador e do iOS).
+- **O service worker mostra a notificação mesmo com o app aberto.** O app não tem tempo
+  real nem handler de mensagem em primeiro plano; esconder o aviso quando havia janela
+  visível deixava quem estava com o PWA aberto sem nenhum sinal.
 - **Parâmetro `codigo_informado`, não `codigo`:** em função SQL, a coluna `codigo` vence
   um parâmetro de mesmo nome e a comparação vira coluna = coluna, aceitando qualquer
   código. Foi um erro real da primeira versão, pego pelos testes.
