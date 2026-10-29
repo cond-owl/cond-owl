@@ -31,7 +31,7 @@ interface EscopoDoWorker {
   registration: {
     showNotification: (
       titulo: string,
-      opcoes?: { body?: string },
+      opcoes?: { body?: string; icon?: string; badge?: string },
     ) => Promise<void>;
   };
   PushEvent: new (tipo: string, init: { data: Uint8Array }) => Event;
@@ -41,9 +41,19 @@ interface EscopoDoWorker {
 const enviarPush = (worker: Worker, payload: unknown) =>
   worker.evaluate(async (corpo) => {
     const escopo = globalThis as unknown as EscopoDoWorker;
-    const exibidas: { title: string; body?: string }[] = [];
+    const exibidas: {
+      title: string;
+      body?: string;
+      icon?: string;
+      badge?: string;
+    }[] = [];
     escopo.registration.showNotification = (title, opcoes) => {
-      exibidas.push({ title, body: opcoes?.body });
+      exibidas.push({
+        title,
+        body: opcoes?.body,
+        icon: opcoes?.icon,
+        badge: opcoes?.badge,
+      });
       return Promise.resolve();
     };
 
@@ -75,7 +85,14 @@ test.describe("service worker de notificações", () => {
       notification: { title: "[AVISO] Teste", body: "Corpo do aviso" },
     });
 
-    expect(exibidas).toEqual([{ title: "[AVISO] Teste", body: "Corpo do aviso" }]);
+    expect(exibidas).toEqual([
+      {
+        title: "[AVISO] Teste",
+        body: "Corpo do aviso",
+        icon: "/pwa-icon-192.png",
+        badge: "/pwa-icon-192.png",
+      },
+    ]);
   });
 
   test("payload sem notification usa o título padrão do app", async ({
@@ -86,6 +103,13 @@ test.describe("service worker de notificações", () => {
 
     const exibidas = await enviarPush(worker, { data: { body: "So dados" } });
 
-    expect(exibidas).toEqual([{ title: "CondoOwl", body: "So dados" }]);
+    expect(exibidas).toEqual([
+      {
+        title: "CondoOwl",
+        body: "So dados",
+        icon: "/pwa-icon-192.png",
+        badge: "/pwa-icon-192.png",
+      },
+    ]);
   });
 });

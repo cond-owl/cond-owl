@@ -8,9 +8,8 @@
  *   ser a primeira coisa do toque (antes de qualquer await) ou o navegador
  *   recusa o prompt.
  * - `sincronizarNotificacao`: roda sozinho após o login quando a permissão já
- *   foi concedida. Sem ele, quem concedeu antes de a configuração do Firebase
- *   estar publicada, ou cujo token foi renovado pelo FCM, ficava sem registro
- *   e sem receber nada, porque o cartão de ativação some após a concessão.
+ *   foi concedida; a tela mostra uma falha e deixa tentar de novo quando o
+ *   registro não termina. O token também atualiza o campo legado do perfil.
  */
 import { initializeApp, type FirebaseOptions } from "firebase/app";
 import { supabase } from "../supabase";
@@ -47,17 +46,19 @@ const variaveisFirebase = [
 ] as const;
 
 export type EstadoNotificacao =
+  | "origem-insegura"
   | "nao-suportado"
   | "pendente"
   | "negada"
   | "concedida";
 
-// Fora do navegador (nativo) não há Notification; no iPhone/iPad, só o PWA
-// aberto pelo ícone da Tela de Início expõe a API.
+// O push depende da API web; ambientes sem Notification não recebem token.
 export const estadoNotificacao = (): EstadoNotificacao => {
-  if (typeof window === "undefined" || !("Notification" in window)) {
+  if (typeof window === "undefined") {
     return "nao-suportado";
   }
+  if (window.isSecureContext === false) return "origem-insegura";
+  if (!("Notification" in window)) return "nao-suportado";
   if (Notification.permission === "granted") return "concedida";
   if (Notification.permission === "denied") return "negada";
   return "pendente";
@@ -120,6 +121,19 @@ const registrarToken = async (userId: string): Promise<string | null> => {
       return "Não foi possível guardar o registro deste aparelho.";
     }
 
+    // `dispositivos_notificacao` é a fonte por aparelho. Mantemos também o
+    // campo legado preenchido para contas e ferramentas que ainda o consultam.
+    const { data: perfil, error: erroPerfil } = await supabase
+      .from("perfis")
+      .update({ fcm_token: token })
+      .eq("id", userId)
+      .select("id")
+      .maybeSingle();
+
+    if (erroPerfil || !perfil) {
+      return "O aparelho foi registrado, mas não foi possível atualizar o token FCM do perfil. Aplique as migrações 0015, 0016 e 0020 do Supabase.";
+    }
+
     return null;
   } catch {
     return "Não foi possível ativar as notificações neste navegador.";
@@ -149,11 +163,12 @@ export const solicitarPermissaoNotificacao = async (
 };
 
 // Reregistra o token quando a permissão já foi concedida, sem novo prompt.
-// Falha em silêncio: a pessoa não pediu nada agora; o botão de ativação nas
-// configurações continua disponível e mostra o erro quando ela tentar.
-export const sincronizarNotificacao = async (userId: string): Promise<void> => {
-  if (estadoNotificacao() !== "concedida") return;
-  await registrarToken(userId);
+// Devolve falhas para a tela manter uma nova tentativa disponível.
+export const sincronizarNotificacao = async (
+  userId: string,
+): Promise<string | null> => {
+  if (estadoNotificacao() !== "concedida") return null;
+  return registrarToken(userId);
 };
 
 // Apaga o registro deste aparelho para o usuário que está saindo. Sem isso o
@@ -177,11 +192,18 @@ export const removerRegistroNotificacao = async (
     const token = await obterToken(registro);
     if (!token) return;
 
-    await supabase
-      .from("dispositivos_notificacao")
-      .delete()
-      .eq("user_id", userId)
-      .eq("token", token);
+    await Promise.all([
+      supabase
+        .from("dispositivos_notificacao")
+        .delete()
+        .eq("user_id", userId)
+        .eq("token", token),
+      supabase
+        .from("perfis")
+        .update({ fcm_token: null })
+        .eq("id", userId)
+        .eq("fcm_token", token),
+    ]);
   } catch {
     // Melhor esforço: o token morto é limpo pelo envio quando o FCM o recusar.
   }

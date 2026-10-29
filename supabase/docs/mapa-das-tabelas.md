@@ -2,7 +2,7 @@
 
 - **Projeto:** CondoOwl (Supabase)
 - **Branch:** fix/0001-vulnerabilidade-perfil-aprovacao
-- **Migrações:** 0001 a 0019
+- **Migrações:** 0001 a 0020
 - **Situação:** esquema validado em Postgres de teste; o app usa o cadastro, a aprovação, os comunicados, as reservas, as sugestões e as atas
 
 ## 1. Visão geral
@@ -16,6 +16,7 @@ mindmap
       perfis
         nome, nascimento, celular, unidade
         preferências de notificação
+        fcm_token legado
         condominio_id
         tipo_usuario_id
       dispositivos_notificacao

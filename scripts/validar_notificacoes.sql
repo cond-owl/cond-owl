@@ -51,9 +51,9 @@ with colunas_perfil as (
       from information_schema.columns
       where table_schema = 'public'
         and table_name = 'dispositivos_notificacao'
-        and column_name in ('user_id', 'plataforma', 'token')
-    ) = 3 then 'OK' else 'FALHA' end,
-    'Esperadas: user_id, plataforma e token'
+        and column_name in ('user_id', 'plataforma', 'token', 'created_at')
+    ) = 4 then 'OK' else 'FALHA' end,
+    'Esperadas: user_id, plataforma, token e created_at'
 
   union all
 
@@ -224,6 +224,82 @@ $q$,
       where p.id is null
     ) then 'FALHA' else 'OK' end,
     'Sem linha em perfis o token do usuário não pode ser gravado (FK, erro 23503)'
+
+  union all
+
+  select
+    17,
+    'Coluna legada fcm_token',
+    case when exists (
+      select 1 from colunas_perfil
+      where column_name = 'fcm_token' and data_type = 'text'
+    ) then 'OK' else 'FALHA' end,
+    'O PWA mantém o token atual também em perfis.fcm_token'
+
+  union all
+
+  select
+    18,
+    'Grant para atualizar fcm_token',
+    case when exists (
+      select 1 from information_schema.column_privileges
+      where table_schema = 'public'
+        and table_name = 'perfis'
+        and column_name = 'fcm_token'
+        and grantee = 'authenticated'
+        and privilege_type = 'UPDATE'
+    ) then 'OK' else 'FALHA' end,
+    'O PWA precisa atualizar o token no próprio perfil'
+
+  union all
+
+  select
+    19,
+    'Registro de token exige usuário aprovado',
+    case when exists (
+      select 1
+      from pg_policy p
+      join pg_class c on c.oid = p.polrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public'
+        and c.relname = 'dispositivos_notificacao'
+        and p.polname = 'dispositivos_notificacao_insert_proprio'
+        and pg_get_expr(p.polwithcheck, p.polrelid) ilike '%is_aprovado%'
+    ) then 'OK' else 'FALHA' end,
+    'Usuários pendentes não podem cadastrar aparelhos para receber comunicados'
+
+  union all
+
+  select
+    20,
+    'RPC de tokens autorizada só ao service_role',
+    case when to_regprocedure('public.tokens_notificacao_pwa(integer,integer)') is not null
+      and has_function_privilege(
+        'service_role',
+        to_regprocedure('public.tokens_notificacao_pwa(integer,integer)'),
+        'execute'
+      )
+      and not has_function_privilege(
+        'authenticated',
+        to_regprocedure('public.tokens_notificacao_pwa(integer,integer)'),
+        'execute'
+      )
+      then 'OK' else 'FALHA' end,
+    'A Edge Function consulta somente tokens web de usuários aprovados'
+
+  union all
+
+  select
+    21,
+    'Tokens existentes refletidos em perfis.fcm_token',
+    case when not exists (
+      select 1
+      from public.dispositivos_notificacao d
+      join public.perfis p on p.id = d.user_id
+      where d.plataforma = 'web'
+        and (p.fcm_token is null or btrim(p.fcm_token) = '')
+    ) then 'OK' else 'FALHA' end,
+    'A migração 0020 preenche o campo legado com o token web mais recente'
 )
 select verificacao, resultado, detalhe
 from validacoes

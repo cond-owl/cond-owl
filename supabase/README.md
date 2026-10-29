@@ -31,6 +31,7 @@ ambiente local com `supabase start`). Elas são ordenadas e cada uma tem um assu
 | `0017_gatilho_notificar_comunicado` | gatilho `comunicados_notificar` (pg_net) que chama a Edge Function `notificar-comunicados` a cada comunicado publicado; URL e segredo da função vêm do Vault |
 | `0018_espacos_de_reserva` | tabela `espacos_reserva` (nome único sem diferenciar maiúsculas); aprovados leem, só o síndico cria e remove; o calendário deixou de usar a lista fixa de espaços |
 | `0019_comunicados_conduta` | `comunicados.importante` e `comunicados.unidade_destino`; Conduta exige o apartamento e a policy de leitura limita o morador aos comunicados gerais e aos do próprio apartamento; a ciência só é aceita para comunicado que o usuário consegue ler |
+| `0020_notificacoes_pwa` | reconcilia tokens legados `perfis.fcm_token`, exige usuário aprovado ao registrar token e fornece à Edge Function uma RPC paginada só com aparelhos autorizados |
 
 Aplicar em ordem. Para dados de teste, `seeds/dev_usuarios_colinas_de_roma.sql` (não é migração; nunca em produção) cria 1 síndico e 2 moradores no condomínio, com senhas geradas na hora e mostradas só uma vez. Nada foi executado em Supabase real: foram validadas num Postgres
 descartável (Docker) com um `auth` simulado. Depois de aplicar, definir o código de
@@ -209,12 +210,12 @@ Ordem para outro servidor/projeto Supabase; nada disto roda sem decisão de quem
 1. Secrets da função (`supabase secrets set`): `FIREBASE_SERVICE_ACCOUNT` (JSON da conta
    de serviço do projeto Firebase) e `NOTIFICAR_WEBHOOK_SECRET` (valor longo e aleatório,
    novo). `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` já vêm do ambiente.
-2. Publicar a função: `supabase functions deploy notificar-comunicados` (o
-   `verify_jwt = false` vem do `config.toml`).
-3. Vault do banco, no SQL Editor (mesmo valor do passo 1 no segundo secret):
+2. Vault do banco, no SQL Editor (mesmo valor do passo 1 no segundo secret):
    `select vault.create_secret('https://<ref>.supabase.co/functions/v1/notificar-comunicados', 'notificar_comunicados_url');`
    `select vault.create_secret('<NOTIFICAR_WEBHOOK_SECRET>', 'notificar_comunicados_segredo');`
-4. Aplicar a migração `0017` no SQL Editor.
+3. Aplicar as migrações pendentes em ordem, incluindo `0017` e `0020`.
+4. Publicar a função: `supabase functions deploy notificar-comunicados` (o
+   `verify_jwt = false` vem do `config.toml`).
 5. **Remover o Database Webhook antigo do painel** (Database > Webhooks), se existir; com
    os dois ativos cada comunicado notificaria em dobro.
 6. Rodar `scripts/validar_notificacoes.sql` (tudo `OK`) e publicar um comunicado de teste.
@@ -222,6 +223,9 @@ Ordem para outro servidor/projeto Supabase; nada disto roda sem decisão de quem
    `falhasPorCodigo`).
 7. No PWA publicado, as variáveis `EXPO_PUBLIC_FIREBASE_*` (inclusive a VAPID) precisam
    estar no ambiente de build; sem elas o app avisa quais faltam ao tocar em ativar.
+8. Cada usuário precisa abrir o PWA e conceder permissão no botão do Mural. Depois disso,
+   o login registra o token em `dispositivos_notificacao` e atualiza `perfis.fcm_token`;
+   quem já concedeu permissão faz esse registro automaticamente no próximo login.
 
 ## Banco: tabelas e por que são assim
 
@@ -353,10 +357,12 @@ Decisões:
   (comparação sem diferenciar maiúsculas, a mesma do RLS). As preferências de manutenção e
   social não se aplicam a conduta.
 - **O aparelho reregistra o token sozinho após o login** quando a permissão já foi
-  concedida (`sincronizarNotificacao`). O cartão "Ativar notificações" some depois da
-  concessão; sem o reregistro, quem concedeu antes da configuração do Firebase estar
-  publicada, ou teve o token renovado pelo FCM, ficava para sempre sem receber nada. O
-  pedido de permissão continua só por toque (regra do navegador e do iOS).
+  concedida (`sincronizarNotificacao`). Falhas agora aparecem no Mural com opção de nova
+  tentativa. O token por aparelho fica em `dispositivos_notificacao`, e o campo legado
+  `perfis.fcm_token` também é atualizado. O pedido de permissão continua só por toque.
+- **A Edge Function entrega somente a usuários aprovados.** A migração `0020` limita
+  a gravação de tokens e oferece a RPC `tokens_notificacao_pwa`, paginada e sem acesso
+  para `anon`/`authenticated`; a função de envio usa essa RPC para excluir contas pendentes.
 - **O service worker mostra a notificação mesmo com o app aberto.** O app não tem tempo
   real nem handler de mensagem em primeiro plano; esconder o aviso quando havia janela
   visível deixava quem estava com o PWA aberto sem nenhum sinal.
