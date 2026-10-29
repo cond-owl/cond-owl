@@ -115,6 +115,115 @@ with colunas_perfil as (
     count(*)::text || ' total; '
       || count(*) filter (where plataforma = 'web')::text || ' instalação(ões) PWA'
   from public.dispositivos_notificacao
+
+  union all
+
+  select
+    9,
+    'Extensão pg_net',
+    case when exists (select 1 from pg_extension where extname = 'pg_net')
+      then 'OK' else 'FALHA' end,
+    'A migração 0017 usa pg_net para chamar a Edge Function'
+
+  union all
+
+  select
+    10,
+    'Gatilho comunicados_notificar',
+    case when exists (
+      select 1
+      from pg_trigger t
+      where t.tgrelid = 'public.comunicados'::regclass
+        and t.tgname = 'comunicados_notificar'
+        and t.tgenabled = 'O'
+        and not t.tgisinternal
+    ) then 'OK' else 'FALHA' end,
+    'Sem o gatilho, publicar comunicado não dispara push; remover o Database Webhook antigo do painel para não duplicar'
+
+  union all
+
+  select
+    11,
+    'Função do gatilho fechada à API',
+    case when to_regprocedure('public.notificar_comunicado_publicado()') is not null
+      and not has_function_privilege(
+        'authenticated',
+        to_regprocedure('public.notificar_comunicado_publicado()'),
+        'execute'
+      )
+    then 'OK' else 'FALHA' end,
+    'Esperado: SECURITY DEFINER sem EXECUTE para authenticated'
+
+  union all
+
+  select
+    12,
+    'Secrets do Vault (só nomes)',
+    case when (
+      select count(*)
+      from vault.secrets
+      where name in ('notificar_comunicados_url', 'notificar_comunicados_segredo')
+    ) = 2 then 'OK' else 'FALHA' end,
+    'Esperados: notificar_comunicados_url e notificar_comunicados_segredo'
+
+  union all
+
+  select
+    13,
+    'Respostas da função (pg_net)',
+    'INFO',
+    case when to_regclass('net._http_response') is null
+      then 'pg_net ainda não instalado'
+      else (xpath(
+        '/row/r/text()',
+        query_to_xml(
+          $q$select count(*) filter (where status_code = 200)::text
+                 || ' com HTTP 200; '
+                 || count(*) filter (where status_code is distinct from 200)::text
+                 || ' com outro status ou erro (o pg_net guarda ~6 h)' as r
+             from net._http_response
+$q$,
+          false, true, ''
+        )
+      ))[1]::text
+    end
+
+  union all
+
+  select
+    14,
+    'FK dos tokens para perfis',
+    case when exists (
+      select 1
+      from pg_constraint
+      where conrelid = 'public.dispositivos_notificacao'::regclass
+        and contype = 'f'
+        and conname = 'dispositivos_notificacao_user_id_fkey'
+        and confrelid = 'public.perfis'::regclass
+    ) then 'OK' else 'FALHA' end,
+    'A Edge Function junta tokens e preferências por essa FK (nome exato)'
+
+  union all
+
+  select
+    15,
+    'service_role lê tokens e perfis',
+    case when has_table_privilege('service_role', 'public.dispositivos_notificacao', 'select, delete')
+      and has_table_privilege('service_role', 'public.perfis', 'select')
+    then 'OK' else 'FALHA' end,
+    'A função usa service_role para ler tokens/preferências e apagar tokens mortos'
+
+  union all
+
+  select
+    16,
+    'Usuários sem perfil',
+    case when exists (
+      select 1 from auth.users u
+      left join public.perfis p on p.id = u.id
+      where p.id is null
+    ) then 'FALHA' else 'OK' end,
+    'Sem linha em perfis o token do usuário não pode ser gravado (FK, erro 23503)'
 )
 select verificacao, resultado, detalhe
 from validacoes
