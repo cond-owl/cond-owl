@@ -496,16 +496,18 @@ export default function App() {
     estadoNotificacao,
   );
 
-  // Permissão concedida mas token não gravado: o cartão continua para a pessoa
-  // tentar de novo, em vez de sumir e deixar o aparelho sem receber nada.
-  const [falhaRegistro, setFalhaRegistro] = useState<boolean>(false);
+  // Permissão concedida mas token não gravado: mostra o motivo e permite tentar
+  // de novo, em vez de deixar o aparelho sem receber nada em silêncio.
+  const [erroRegistroNotif, setErroRegistroNotif] = useState<string | null>(null);
 
   const habilitarNotificacoes = async () => {
     if (!uidLogado) return;
 
     const erro = await solicitarPermissaoNotificacao(uidLogado);
     setEstadoNotif(estadoNotificacao());
-    setFalhaRegistro(erro !== null && estadoNotificacao() === "concedida");
+    setErroRegistroNotif(
+      estadoNotificacao() === "concedida" ? erro : null,
+    );
     if (erro) mostrarAlerta("Notificações", erro);
   };
 
@@ -516,8 +518,8 @@ export default function App() {
 
     carregarPreferencias(uidLogado);
 
-    // Permissão já concedida: garante o token deste aparelho sem novo prompt.
-    void sincronizarNotificacao(uidLogado);
+    // Permissão já concedida: atualiza o token e mostra falhas com opção de retry.
+    void sincronizarNotificacao(uidLogado).then(setErroRegistroNotif);
   }, [uidLogado, isPending]);
 
   // Eventos/reservas, atas e sugestões vêm do banco (tabelas eventos, atas e sugestoes;
@@ -1458,9 +1460,10 @@ export default function App() {
                 )}
               </View>
 
-              {(estadoNotif === "pendente" ||
+              {(estadoNotif === "origem-insegura" ||
+                estadoNotif === "pendente" ||
                 estadoNotif === "negada" ||
-                falhaRegistro ||
+                (estadoNotif === "concedida" && erroRegistroNotif !== null) ||
                 (estadoNotif === "nao-suportado" && Platform.OS === "web")) && (
                 <View
                   style={[
@@ -1485,15 +1488,19 @@ export default function App() {
                     }}
                   >
                     {estadoNotif === "concedida" &&
-                      "A permissão foi concedida, mas não foi possível registrar este aparelho para receber avisos. Toque abaixo para tentar de novo."}
+                      (erroRegistroNotif ??
+                        "A permissão foi concedida, mas não foi possível registrar este aparelho para receber avisos. Toque abaixo para tentar de novo.")}
                     {estadoNotif === "pendente" &&
-                      "Toque abaixo para permitir notificações neste aparelho. No iPhone ou iPad, abra o PWA pelo ícone adicionado à Tela de Início."}
+                      "Toque abaixo para permitir notificações neste navegador."}
+                    {estadoNotif === "origem-insegura" &&
+                      "O navegador bloqueia notificações neste endereço HTTP. Push exige HTTPS ou localhost; abra o PWA por uma conexão segura para registrar este aparelho."}
                     {estadoNotif === "negada" &&
                       "As notificações estão bloqueadas para este app. Libere nas configurações do navegador (ou do aparelho, para o app instalado) e toque abaixo para ativar."}
                     {estadoNotif === "nao-suportado" &&
-                      "Este navegador não recebe notificações. No iPhone ou iPad, toque em Compartilhar, escolha Adicionar à Tela de Início e abra o app pelo ícone."}
+                      "Este navegador não oferece suporte a notificações push. Abra o PWA em um navegador compatível."}
                   </Text>
-                  {estadoNotif !== "nao-suportado" && (
+                  {estadoNotif !== "nao-suportado" &&
+                    estadoNotif !== "origem-insegura" && (
                     <TouchableOpacity
                       onPress={() => void habilitarNotificacoes()}
                       style={{
@@ -1505,7 +1512,9 @@ export default function App() {
                       }}
                     >
                       <Text style={{ color: "#FFF", fontWeight: "bold" }}>
-                        Ativar notificações
+                        {estadoNotif === "concedida"
+                          ? "Tentar novamente"
+                          : "Ativar notificações"}
                       </Text>
                     </TouchableOpacity>
                   )}

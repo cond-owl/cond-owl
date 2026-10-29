@@ -87,6 +87,24 @@ const entrarComoMorador = async (page: Page) => {
 };
 
 test.describe("cartão de notificações no Mural", () => {
+  test("origem HTTP explica que notificações exigem HTTPS ou localhost", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "isSecureContext", {
+        configurable: true,
+        value: false,
+      });
+    });
+    await simularNotification(page, "default");
+    await entrarComoMorador(page);
+
+    await expect(page.getByText(/O navegador bloqueia notificações neste endereço HTTP/)).toBeVisible();
+    await expect(
+      page.getByText("Ativar notificações", { exact: true }),
+    ).toBeHidden();
+  });
+
   // O Chromium do teste é anônimo (sem Push API), então o registro do token
   // falha depois da permissão concedida. É o cenário que importa: o cartão
   // não pode sumir, senão a pessoa fica sem receber e sem pista na tela.
@@ -99,11 +117,9 @@ test.describe("cartão de notificações no Mural", () => {
     await expect(page.getByText("Quer receber avisos neste PWA?")).toBeVisible();
     await page.getByText("Ativar notificações", { exact: true }).click();
 
+    await expect(page.getByText("Quer receber avisos neste PWA?")).toBeVisible();
     await expect(
-      page.getByText(/permissão foi concedida, mas não foi possível registrar/),
-    ).toBeVisible();
-    await expect(
-      page.getByText("Ativar notificações", { exact: true }),
+      page.getByText("Tentar novamente", { exact: true }),
     ).toBeVisible();
   });
 
@@ -116,14 +132,14 @@ test.describe("cartão de notificações no Mural", () => {
     ).toBeVisible();
   });
 
-  test("navegador sem Notification orienta instalar o PWA, sem botão", async ({
+  test("navegador sem Notification orienta usar navegador compatível", async ({
     page,
   }) => {
     await simularNotification(page, "ausente");
     await entrarComoMorador(page);
 
     await expect(
-      page.getByText(/Adicionar à Tela de Início e abra o app pelo ícone/),
+      page.getByText(/Abra o PWA em um navegador compatível/),
     ).toBeVisible();
     await expect(
       page.getByText("Ativar notificações", { exact: true }),
@@ -132,7 +148,7 @@ test.describe("cartão de notificações no Mural", () => {
 
   // Perfil persistente: o contexto padrão do Playwright é anônimo e o Chrome
   // desliga o Push API em anônimo, o que impediria o registro de chegar ao FCM.
-  test("permissão já concedida não mostra o cartão e reregistra o aparelho", async ({
+  test("permissão já concedida mantém retry se o token não puder ser registrado", async ({
     baseURL,
   }) => {
     // outputPath fica na pasta de resultados do Playwright, que ele mesmo limpa.
@@ -146,11 +162,9 @@ test.describe("cartão de notificações no Mural", () => {
     try {
       const page = contexto.pages()[0] ?? (await contexto.newPage());
       await simularNotification(page, "granted");
-      // Sem novo prompt, o login sozinho precisa tentar registrar o token. O
-      // app só registra o service worker do FCM nesse caminho, então a
-      // presença do registro prova que o reregistro rodou. O token em si não
-      // é obtido: o Chromium headless não tem serviço de push (getToken falha
-      // com "push service not available"), e o fluxo termina em silêncio.
+      // Sem novo prompt, o login tenta registrar o token. O Chromium headless
+      // não tem um serviço de push real, então o erro precisa continuar visível
+      // e permitir nova tentativa em vez de esconder o cartão.
       await entrarComoMorador(page);
 
       await expect(page.getByText("Mural de Avisos")).toBeVisible();
@@ -166,7 +180,8 @@ test.describe("cartão de notificações no Mural", () => {
         .toBeGreaterThan(0);
       await expect(
         page.getByText("Quer receber avisos neste PWA?"),
-      ).toBeHidden();
+      ).toBeVisible();
+      await expect(page.getByText("Tentar novamente", { exact: true })).toBeVisible();
     } finally {
       await contexto.close();
     }

@@ -139,32 +139,25 @@ serve(async (req) => {
       }
     }
 
-    // Só tokens web: os do provedor nativo ('expo') têm outro formato e o FCM
-    // os rejeitaria. AVISO e REUNIÃO vão para todos; MANUTENÇÃO e SOCIAL
-    // respeitam a preferência de cada perfil. A leitura é paginada porque o
-    // PostgREST corta em max_rows (1000) sem avisar.
+    // A RPC lê apenas tokens web de usuários aprovados e pagina até o limite do
+    // PostgREST. AVISO e REUNIÃO vão para todos; MANUTENÇÃO e SOCIAL respeitam
+    // a preferência de cada perfil.
     const todosOsTokens = new Set<string>();
     for (let inicio = 0; ; inicio += PAGINA_CONSULTA) {
-      let query = supabase
-        .from("dispositivos_notificacao")
-        .select(
-          "token, perfil:perfis!dispositivos_notificacao_user_id_fkey!inner(notifica_manutencao, notifica_social, unidade)",
-        )
-        .eq("plataforma", "web")
-        .order("id")
-        .range(inicio, inicio + PAGINA_CONSULTA - 1);
-
-      if (comunicado.tipo === "MANUTENÇÃO") {
-        query = query.eq("perfil.notifica_manutencao", true);
-      } else if (comunicado.tipo === "SOCIAL") {
-        query = query.eq("perfil.notifica_social", true);
-      }
-
-      const { data: pagina, error } = await query;
+      const { data: pagina, error } = await supabase.rpc(
+        "tokens_notificacao_pwa",
+        { p_inicio: inicio, p_limite: PAGINA_CONSULTA },
+      );
       if (error) throw error;
       (pagina ?? []).forEach((d) => {
+        if (
+          comunicado.tipo === "MANUTENÇÃO" &&
+          d.notifica_manutencao !== true
+        ) return;
+        if (comunicado.tipo === "SOCIAL" && d.notifica_social !== true) return;
+
         if (unidadeDestino !== null) {
-          const unidade = String(d.perfil?.unidade ?? "").trim().toLowerCase();
+          const unidade = String(d.unidade ?? "").trim().toLowerCase();
           if (unidade !== unidadeDestino) return;
         }
         todosOsTokens.add(String(d.token));
@@ -193,9 +186,6 @@ serve(async (req) => {
         // Urgência alta: sem ela o aparelho parado pode receber o aviso horas
         // depois, quando o navegador economiza bateria.
         headers: { Urgency: "high", TTL: "86400" },
-        notification: {
-          icon: `${supabaseUrl}/storage/v1/object/public/assets/altadef1024.png`,
-        },
       },
     };
 
