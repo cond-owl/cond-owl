@@ -417,7 +417,9 @@ enabled = true
 
 [functions.notificar-comunicados]
 enabled = true
-verify_jwt = true
+# O gatilho do banco autentica com segredo compartilhado (NOTIFICAR_WEBHOOK_SECRET),
+# não com JWT; ver o cabeçalho da função e a migração 0017.
+verify_jwt = false
 import_map = "./functions/notificar-comunicados/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx

@@ -42,8 +42,12 @@ Morador novo fica em **Cadastro em Análise** até o síndico aprovar.
 - Upload do PDF da ata não existe (guarda nome ou link).
 - Notificações push do PWA via Firebase Cloud Messaging Web
   (`src/utils/notificacoes.ts`, tabela `dispositivos_notificacao`). O token é
-  registrado por instalação do PWA depois de a pessoa permitir notificações;
-  criar conta não cria nem autoriza token push.
+  registrado por instalação do PWA depois de a pessoa permitir notificações
+  (e reregistrado sozinho a cada login enquanto a permissão estiver concedida);
+  criar conta não cria nem autoriza token push. O envio parte do gatilho
+  `comunicados_notificar` (migração 0017), que chama a Edge Function
+  `notificar-comunicados`; o passo a passo de liberação está no
+  `supabase/README.md`.
 
 Expo muda muito entre versões: **não responder de memória**. Consultar
 https://docs.expo.dev/versions/v57.0.0/ e https://docs.expo.dev/llms.txt

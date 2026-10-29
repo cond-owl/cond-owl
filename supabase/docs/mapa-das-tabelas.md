@@ -2,7 +2,7 @@
 
 - **Projeto:** CondoOwl (Supabase)
 - **Branch:** fix/0001-vulnerabilidade-perfil-aprovacao
-- **Migrações:** 0001 a 0016
+- **Migrações:** 0001 a 0017
 - **Situação:** esquema validado em Postgres de teste; o app usa o cadastro, a aprovação, os comunicados, as reservas, as sugestões e as atas
 
 ## 1. Visão geral
@@ -135,7 +135,7 @@ sequenceDiagram
 | `dispositivos_notificacao` | o próprio usuário | usuário registra tokens das instalações do PWA; síndico não lê tokens |
 | `tipo_usuario` | qualquer usuário logado | ninguém pela API (só o dono do banco) |
 | `condominios` | síndico e moradores aprovados | só síndico |
-| `comunicados` | síndico e moradores aprovados | só síndico |
+| `comunicados` | síndico e moradores aprovados | só síndico; cada publicação dispara o push pelo gatilho `comunicados_notificar` (0017) |
 | `comunicados_vistos` | o próprio usuário; síndico | cada um registra o seu |
 | `eventos` | síndico e moradores aprovados | síndico cria qualquer tipo; morador aprovado só reserva em seu nome, de hoje em diante |
 | `atas` | síndico e moradores aprovados | só síndico |
