@@ -5,11 +5,12 @@ import {
   solicitarPermissaoNotificacao,
   type EstadoNotificacao,
 } from "@/utils/notificacoes";
+
 import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Session } from "@supabase/supabase-js";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -24,6 +25,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Vibration,
   View,
   useWindowDimensions,
 } from "react-native";
@@ -66,6 +68,7 @@ import {
   carregarEspacos,
   carregarEventos,
   carregarSugestoes,
+  carregarUnidades,
   criarAta,
   criarEspaco,
   criarReserva,
@@ -74,7 +77,7 @@ import {
   type Ata,
   type EspacoReserva,
   type Evento,
-  type Sugestao,
+  type Sugestao
 } from "../utils/dadosCondominio";
 
 // Linha da tabela `comunicados` como o PostgREST devolve (snake_case).
@@ -83,6 +86,9 @@ interface ComunicadoRow {
   tipo: string;
   titulo: string;
   texto: string;
+  importante: boolean;
+  unidade_destino: string | null;
+  autor_id: string;
   created_at: string;
   comunicados_vistos: { user_id: string }[] | null;
 }
@@ -93,9 +99,53 @@ interface Comunicado {
   tipo: string;
   titulo: string;
   texto: string;
+  importante: boolean;
+  unidadeDestino: string | null;
+  autorId: string;
   data: string;
   vistoPor: string[];
 }
+
+type CategoriaComunicado = "REUNIÃO" | "MANUTENÇÃO" | "SOCIAL" | "CONDUTA";
+
+// Cores fixas por categoria: não mudam com o tema para o morador reconhecer o
+// tipo do comunicado de imediato, mas o texto sobre elas continua branco.
+const CATEGORIAS_COMUNICADO: {
+  tipo: CategoriaComunicado;
+  cor: string;
+  icone: keyof typeof Ionicons.glyphMap;
+  descricao: string;
+}[] = [
+  {
+    tipo: "REUNIÃO",
+    cor: "#2563EB",
+    icone: "people-outline",
+    descricao: "Assembleias e encontros",
+  },
+  {
+    tipo: "MANUTENÇÃO",
+    cor: "#D97706",
+    icone: "build-outline",
+    descricao: "Obras e reparações",
+  },
+  {
+    tipo: "SOCIAL",
+    cor: "#059669",
+    icone: "cafe-outline",
+    descricao: "Eventos e confraternizações",
+  },
+  {
+    tipo: "CONDUTA",
+    cor: "#DC2626",
+    icone: "shield-outline",
+    descricao: "Regras de convivência",
+  },
+];
+
+// Comunicados antigos ainda podem ter a categoria AVISO, removida do formulário.
+// Eles continuam legíveis, com uma cor neutra.
+const categoriaDoComunicado = (tipo: string) =>
+  CATEGORIAS_COMUNICADO.find((c) => c.tipo === tipo.toUpperCase());
 
 
 const ORIENTACOES: ("portrait" | "landscape")[] = ["portrait", "landscape"];
@@ -415,7 +465,7 @@ export default function App() {
     const { data, error } = await supabase
       .from("comunicados")
       .select(
-        "id, tipo, titulo, texto, created_at, comunicados_vistos(user_id)",
+        "id, tipo, titulo, texto, importante, unidade_destino, autor_id, created_at, comunicados_vistos(user_id)",
       )
       .order("created_at", { ascending: false });
     if (error) return null;
@@ -424,6 +474,9 @@ export default function App() {
       tipo: c.tipo,
       titulo: c.titulo,
       texto: c.texto,
+      importante: c.importante,
+      unidadeDestino: c.unidade_destino,
+      autorId: c.autor_id,
       data: formatarDataCurta(chaveData(new Date(c.created_at))),
       vistoPor: (c.comunicados_vistos ?? []).map((v) => v.user_id),
     }));
@@ -514,6 +567,92 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedMesAta, setSelectedMesAta] = useState<string | null>(null);
   const [showNovoComunicado, setShowNovoComunicado] = useState<boolean>(false);
+    // Ao abrir o app só aparecem os não lidos; o seletor alterna para os já lidos.
+  const [filtroComunicados, setFiltroComunicados] = useState<
+    "nao_lidos" | "lidos"
+  >("nao_lidos");
+  // Apartamentos do condomínio, usados só no destinatário de Conduta.
+  const [unidades, setUnidades] = useState<string[]>([]);
+  const [erroUnidades, setErroUnidades] = useState<string>("");
+  // Comunicado de conduta escolhido para o morador confirmar ciência.
+  const [comunicadoParaCiencia, setComunicadoParaCiencia] =
+    useState<Comunicado | null>(null);
+  const [confirmandoCiencia, setConfirmandoCiencia] = useState<boolean>(false);
+
+  // Vibração de alerta: 1,5 s de vibração e troca de aba bloqueada nesse período.
+  const [vibrandoImportante, setVibrandoImportante] = useState<boolean>(false);
+  const idsVibrados = useRef<Set<number>>(new Set());
+  const uidDaVibracao = useRef<string | undefined>(undefined);
+  const temporizadoresVibracao = useRef<{
+    intervalo: ReturnType<typeof setInterval> | null;
+    fim: ReturnType<typeof setTimeout> | null;
+  }>({ intervalo: null, fim: null });
+
+  // Outro usuário no mesmo aparelho precisa ser avisado dos próprios comunicados.
+  useEffect(() => {
+    if (uidDaVibracao.current === uidLogado) return;
+    uidDaVibracao.current = uidLogado;
+    idsVibrados.current.clear();
+  }, [uidLogado]);
+
+  useEffect(() => {
+    if (!showNovoComunicado || user !== "sindico") return;
+    carregarUnidades().then((lista) => {
+      setErroUnidades(
+        lista ? "" : "Não foi possível carregar os apartamentos.",
+      );
+      if (lista) setUnidades(lista);
+    });
+  }, [showNovoComunicado, user]);
+
+  // Dispara uma única vez por comunicado importante não lido. O síndico não é
+  // avisado do comunicado que ele mesmo publicou.
+  useEffect(() => {
+    if (!uidLogado) return;
+    const novos = comunicados.filter(
+      (c) =>
+        c.importante &&
+        c.autorId !== uidLogado &&
+        !c.vistoPor.includes(uidLogado) &&
+        !idsVibrados.current.has(c.id),
+    );
+    if (novos.length === 0) return;
+
+    novos.forEach((c) => idsVibrados.current.add(c.id));
+    setVibrandoImportante(true);
+    Vibration.vibrate(1500);
+    // No iOS a duração do vibrate é ignorada; repetir aproxima dos 1,5 s.
+    if (Platform.OS === "ios") {
+      let repeticoes = 0;
+      temporizadoresVibracao.current.intervalo = setInterval(() => {
+        repeticoes += 1;
+        if (repeticoes >= 3) return;
+        Vibration.vibrate();
+      }, 400);
+    }
+    temporizadoresVibracao.current.fim = setTimeout(() => {
+      if (temporizadoresVibracao.current.intervalo) {
+        clearInterval(temporizadoresVibracao.current.intervalo);
+        temporizadoresVibracao.current.intervalo = null;
+      }
+      Vibration.cancel();
+      setVibrandoImportante(false);
+    }, 1500);
+  }, [comunicados, uidLogado]);
+
+  // Ao sair, encerra a vibração e os temporizadores pendentes.
+  useEffect(
+    () => () => {
+      if (temporizadoresVibracao.current.intervalo) {
+        clearInterval(temporizadoresVibracao.current.intervalo);
+      }
+      if (temporizadoresVibracao.current.fim) {
+        clearTimeout(temporizadoresVibracao.current.fim);
+      }
+      Vibration.cancel();
+    },
+    [],
+  );
   const [showNovaSugestao, setShowNovaSugestao] = useState<boolean>(false);
   const [showAvaliarSugestao, setShowAvaliarSugestao] = useState<number | null>(
     null,
@@ -832,11 +971,13 @@ export default function App() {
     mostrarAlerta("Sucesso", "A sua reserva foi efetuada!");
   };
 
-  const [novoCom, setNovoCom] = useState({
-    titulo: "",
-    texto: "",
-    tipo: "AVISO",
-  });
+    const [novoCom, setNovoCom] = useState<{
+    tipo: CategoriaComunicado;
+    titulo: string;
+    texto: string;
+    importante: boolean;
+    unidade: string;
+  }>({ tipo: "REUNIÃO", titulo: "", texto: "", importante: false, unidade: "" });
   const [novaSugestaoTexto, setNovaSugestaoTexto] = useState<string>("");
   const [motivoArquivamento, setMotivoArquivamento] = useState<string>("");
 
@@ -845,6 +986,8 @@ export default function App() {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
 
   const changeTab = (tab: string) => {
+    // Durante a vibração de um comunicado importante o usuário fica no mural.
+    if (vibrandoImportante) return;
     animate();
     setActiveTab(tab);
   };
@@ -859,33 +1002,84 @@ export default function App() {
     }
   };
 
-  const marcarComoVisto = async (id: number) => {
+  const marcarComoVisto = async (id: number): Promise<boolean> => {
     const uid = session?.user.id;
-    if (!uid) return;
+    if (!uid) return false;
     const { error } = await supabase
       .from("comunicados_vistos")
       .insert({ comunicado_id: id });
     // 23505 = já estava marcado como visto: o estado local só acompanha.
     if (error && error.code !== "23505") {
       mostrarAlerta("Erro", "Não foi possível marcar como visto.");
-      return;
+      return false;
     }
     animate();
     setComunicados((prev) =>
       prev.map((c) =>
-        c.id === id ? { ...c, vistoPor: [...c.vistoPor, uid] } : c,
+        c.id === id && !c.vistoPor.includes(uid)
+          ? { ...c, vistoPor: [...c.vistoPor, uid] }
+          : c,
       ),
     );
+    return true;
+  };
+
+  // Conduta exige a confirmação de ciência; as demais categorias marcam direto.
+  const pedirConfirmacaoDeCiencia = (comunicado: Comunicado) => {
+    if (comunicado.tipo.toUpperCase() === "CONDUTA") {
+      setComunicadoParaCiencia(comunicado);
+      return;
+    }
+    marcarComoVisto(comunicado.id);
+  };
+
+  const confirmarCiencia = async () => {
+    if (!comunicadoParaCiencia || confirmandoCiencia) return;
+    setConfirmandoCiencia(true);
+    const confirmado = await marcarComoVisto(comunicadoParaCiencia.id);
+    setConfirmandoCiencia(false);
+    // Erro já foi avisado; mantém o modal para o morador tentar de novo.
+    if (confirmado) setComunicadoParaCiencia(null);
   };
 
   const [publicandoCom, setPublicandoCom] = useState<boolean>(false);
   // Erro mostrado dentro do modal (mantém o erro visível junto do formulário).
   const [erroNovoCom, setErroNovoCom] = useState<string>("");
 
+  const abrirNovoComunicado = () => {
+    // Sempre abre no estado padrão: Reunião, sem destaque e sem apartamento.
+    setNovoCom({
+      tipo: "REUNIÃO",
+      titulo: "",
+      texto: "",
+      importante: false,
+      unidade: "",
+    });
+    setErroNovoCom("");
+    setErroUnidades("");
+    setShowNovoComunicado(true);
+  };
+
+  // Cada categoria começa com o seu padrão de importância: Conduta já nasce
+  // importante; as demais, sem destaque.
+  const escolherCategoria = (tipo: CategoriaComunicado) => {
+    setNovoCom((prev) => ({
+      ...prev,
+      tipo,
+      importante: tipo === "CONDUTA",
+      unidade: tipo === "CONDUTA" ? prev.unidade : "",
+    }));
+  };
+
   const criarComunicado = async () => {
     if (publicandoCom) return;
     if (!novoCom.titulo.trim() || !novoCom.texto.trim()) {
       setErroNovoCom("Preencha o título e a mensagem.");
+      return;
+    }
+    const unidade = novoCom.unidade.trim();
+    if (novoCom.tipo === "CONDUTA" && !unidade) {
+      setErroNovoCom("Escolha o apartamento destinatário do comunicado.");
       return;
     }
     setPublicandoCom(true);
@@ -894,6 +1088,8 @@ export default function App() {
       tipo: novoCom.tipo,
       titulo: novoCom.titulo.trim(),
       texto: novoCom.texto.trim(),
+      importante: novoCom.importante,
+      unidade_destino: novoCom.tipo === "CONDUTA" ? unidade : null,
     });
     setPublicandoCom(false);
     if (error) {
@@ -902,7 +1098,13 @@ export default function App() {
     }
     animate();
     setShowNovoComunicado(false);
-    setNovoCom({ tipo: "AVISO", titulo: "", texto: "" });
+    setNovoCom({
+      tipo: "REUNIÃO",
+      titulo: "",
+      texto: "",
+      importante: false,
+      unidade: "",
+    });
     aplicarComunicados(await carregarComunicados());
   };
 
@@ -1097,6 +1299,20 @@ export default function App() {
         warning: "#D97706",
       };
 
+        // Contagem do seletor e lista filtrada do mural. O padrão é mostrar só o que
+  // ainda não foi lido; os lidos ficam a um toque de distância.
+  const uidMural = uidLogado ?? "";
+  const categoriaAtual = categoriaDoComunicado(novoCom.tipo);
+  const corCategoriaAtual = categoriaAtual?.cor ?? theme.primary[0];
+  const corConduta = categoriaDoComunicado("CONDUTA")?.cor ?? theme.danger;
+  const comunicadosNaoLidos = comunicados.filter(
+    (c) => !c.vistoPor.includes(uidMural),
+  );
+  const comunicadosVisiveis =
+    filtroComunicados === "nao_lidos"
+      ? comunicadosNaoLidos
+      : comunicados.filter((c) => c.vistoPor.includes(uidMural));
+
   // --- GRADE DO CALENDÁRIO (mês exibido) ---
   const totalDiasMes = diasNoMes(mesExibido.ano, mesExibido.mes);
   const deslocamentoMes = new Date(mesExibido.ano, mesExibido.mes, 1).getDay();
@@ -1225,12 +1441,9 @@ export default function App() {
                     Mural de Avisos
                   </Text>
                 </View>
-                {user === "sindico" && (
+                                {user === "sindico" && (
                   <TouchableOpacity
-                    onPress={() => {
-                      setErroNovoCom("");
-                      setShowNovoComunicado(true);
-                    }}
+                    onPress={abrirNovoComunicado}
                     activeOpacity={0.8}
                   >
                     <LinearGradient
@@ -1305,14 +1518,86 @@ export default function App() {
                 </Text>
               )}
 
+                            {comunicados.length > 0 && (
+                <View
+                  style={{
+                    flexDirection: "row",
+                    backgroundColor: theme.card,
+                    borderColor: theme.border,
+                    borderWidth: 1,
+                    borderRadius: 14,
+                    padding: 4,
+                    marginBottom: 16,
+                  }}
+                >
+                  {(
+                    [
+                      {
+                        id: "nao_lidos",
+                        rotulo: "Não lidos",
+                        total: comunicadosNaoLidos.length,
+                      },
+                      {
+                        id: "lidos",
+                        rotulo: "Lidos",
+                        total: comunicados.length - comunicadosNaoLidos.length,
+                      },
+                    ] as const
+                  ).map((opcao) => {
+                    const ativo = filtroComunicados === opcao.id;
+                    return (
+                      <TouchableOpacity
+                        key={opcao.id}
+                        style={{
+                          flex: 1,
+                          paddingVertical: 10,
+                          borderRadius: 11,
+                          alignItems: "center",
+                          backgroundColor: ativo
+                            ? theme.primary[0]
+                            : "transparent",
+                        }}
+                        onPress={() => setFiltroComunicados(opcao.id)}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: ativo }}
+                      >
+                        <Text
+                          style={{
+                            color: ativo ? "#FFF" : theme.textMuted,
+                            fontWeight: "700",
+                            fontSize: 13,
+                          }}
+                        >
+                          {opcao.rotulo} ({opcao.total})
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+
               {erroComunicados === "" && comunicados.length === 0 && (
                 <Text style={{ color: theme.textMuted, marginBottom: 12 }}>
                   Nenhum comunicado publicado ainda.
                 </Text>
               )}
+              {erroComunicados === "" &&
+                comunicados.length > 0 &&
+                comunicadosVisiveis.length === 0 && (
+                  <Text style={{ color: theme.textMuted, marginBottom: 12 }}>
+                    {filtroComunicados === "nao_lidos"
+                      ? "Nenhum comunicado não lido."
+                      : "Nenhum comunicado lido ainda."}
+                  </Text>
+                )}
 
-              {comunicados.map((c) => {
-                const visto = c.vistoPor.includes(session?.user.id ?? "");
+                            {comunicadosVisiveis.map((c) => {
+                const visto = c.vistoPor.includes(uidMural);
+                const categoria = categoriaDoComunicado(c.tipo);
+                const cor = categoria?.cor ?? theme.textMuted;
+                const icone = categoria?.icone ?? "alert-circle-outline";
+                const destaque = c.importante && !visto;
+                const ehConduta = c.tipo.toUpperCase() === "CONDUTA";
                 return (
                   <View
                     key={c.id}
@@ -1320,9 +1605,12 @@ export default function App() {
                       styles.card,
                       {
                         backgroundColor: theme.card,
-                        borderColor: theme.border,
-                        opacity: visto ? 0.6 : 1,
-                        shadowColor: theme.border,
+                        borderColor: destaque ? cor : theme.border,
+                        borderWidth: destaque ? 2 : 1,
+                        opacity: visto ? 0.72 : 1,
+                        shadowColor: destaque ? cor : theme.border,
+                        shadowOpacity: destaque ? 0.22 : 0.05,
+                        elevation: destaque ? 6 : 3,
                       },
                     ]}
                   >
@@ -1330,24 +1618,20 @@ export default function App() {
                       <View
                         style={[
                           styles.tag,
-                          { backgroundColor: theme.primary[0] + "1A" },
+                          { backgroundColor: cor + "1A" },
                         ]}
                       >
                         <Ionicons
-                          name={
-                            c.tipo.toUpperCase() === "REUNIÃO"
-                              ? "people-outline"
-                              : "alert-circle-outline"
-                          }
+                          name={icone}
                           size={14}
-                          color={theme.primary[0]}
+                          color={cor}
                           style={{ marginRight: 4 }}
                         />
                         <Text
                           style={{
-                            color: theme.primary[0],
+                            color: cor,
                             fontSize: 12,
-                            fontWeight: "700",
+                            fontWeight: "800",
                             textTransform: "uppercase",
                           }}
                         >
@@ -1364,6 +1648,53 @@ export default function App() {
                         {c.data}
                       </Text>
                     </View>
+
+                    {c.importante && (
+                      <View
+                        style={[
+                          styles.row,
+                          { marginTop: 10, alignSelf: "flex-start" },
+                        ]}
+                      >
+                        <Ionicons
+                          name="flame"
+                          size={14}
+                          color={cor}
+                          style={{ marginRight: 5 }}
+                        />
+                        <Text
+                          style={{
+                            color: cor,
+                            fontSize: 11,
+                            fontWeight: "800",
+                            letterSpacing: 0.6,
+                          }}
+                        >
+                          IMPORTANTE
+                        </Text>
+                      </View>
+                    )}
+
+                    {c.unidadeDestino && (
+                      <View style={[styles.row, { marginTop: 8 }]}>
+                        <Feather
+                          name="map-pin"
+                          size={12}
+                          color={theme.textMuted}
+                          style={{ marginRight: 5 }}
+                        />
+                        <Text
+                          style={{
+                            color: theme.textMuted,
+                            fontSize: 12,
+                            fontWeight: "600",
+                          }}
+                        >
+                          Apartamento {c.unidadeDestino}
+                        </Text>
+                      </View>
+                    )}
+
                     <Text style={[styles.cardTitle, { color: theme.text }]}>
                       {c.titulo}
                     </Text>
@@ -1376,25 +1707,48 @@ export default function App() {
                         style={[
                           styles.btnOutline,
                           {
-                            borderColor: theme.border,
+                            borderColor: destaque ? cor : theme.border,
                             marginTop: 16,
                             backgroundColor: theme.bg,
                           },
                         ]}
-                        onPress={() => marcarComoVisto(c.id)}
+                        onPress={() => pedirConfirmacaoDeCiencia(c)}
                       >
                         <Feather
-                          name="check-circle"
+                          name={ehConduta ? "shield" : "check-circle"}
                           size={18}
-                          color={theme.success}
+                          color={destaque ? cor : theme.success}
                           style={{ marginRight: 8 }}
                         />
                         <Text
-                          style={{ color: theme.success, fontWeight: "700" }}
+                          style={{
+                            color: destaque ? cor : theme.success,
+                            fontWeight: "700",
+                          }}
                         >
-                          Marcar como Visto
+                          Marcar como visto
                         </Text>
                       </TouchableOpacity>
+                    )}
+
+                    {visto && (
+                      <View style={[styles.row, { marginTop: 16 }]}>
+                        <Feather
+                          name="check-circle"
+                          size={16}
+                          color={theme.success}
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text
+                          style={{
+                            color: theme.success,
+                            fontSize: 13,
+                            fontWeight: "700",
+                          }}
+                        >
+                          Lido
+                        </Text>
+                      </View>
                     )}
                   </View>
                 );
@@ -2556,7 +2910,7 @@ export default function App() {
             </View>
           </ModalOverlay>
         </Modal>
-        {/* Modal: Novo Comunicado */}
+                {/* Modal: Novo Comunicado */}
         <Modal
           visible={showNovoComunicado}
           transparent
@@ -2568,22 +2922,51 @@ export default function App() {
             <View
               style={[styles.modalContent, { backgroundColor: theme.card }]}
             >
-              <Text
-                style={[
-                  styles.pageTitle,
-                  { color: theme.text, marginBottom: 15 },
-                ]}
-              >
-                Novo Comunicado
-              </Text>
+              <View style={[styles.row, { marginBottom: 20 }]}>
+                <View
+                  style={{
+                    width: 42,
+                    height: 42,
+                    borderRadius: 13,
+                    backgroundColor: corCategoriaAtual + "1A",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    marginRight: 12,
+                  }}
+                >
+                  <Feather
+                    name="edit-3"
+                    size={20}
+                    color={corCategoriaAtual}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text
+                    style={[
+                      styles.pageTitle,
+                      { color: theme.text, fontSize: 22 },
+                    ]}
+                  >
+                    Novo comunicado
+                  </Text>
+                  <Text
+                    style={{
+                      color: theme.textMuted,
+                      fontSize: 12,
+                      marginTop: 2,
+                    }}
+                  >
+                    Escolha a categoria e escreva a mensagem.
+                  </Text>
+                </View>
+              </View>
 
-              {/* NOVO: Seleção de Categoria */}
               <Text
                 style={{
                   color: theme.text,
                   fontSize: 12,
-                  marginBottom: 6,
-                  fontWeight: "600",
+                  marginBottom: 8,
+                  fontWeight: "700",
                 }}
               >
                 Categoria
@@ -2593,37 +2976,80 @@ export default function App() {
                   flexDirection: "row",
                   flexWrap: "wrap",
                   gap: 8,
-                  marginBottom: 15,
+                  marginBottom: 18,
                 }}
               >
-                {["AVISO", "REUNIÃO", "MANUTENÇÃO", "SOCIAL"].map((cat) => (
-                  <TouchableOpacity
-                    key={cat}
-                    onPress={() => setNovoCom({ ...novoCom, tipo: cat })}
-                    style={{
-                      paddingVertical: 6,
-                      paddingHorizontal: 12,
-                      borderRadius: 20,
-                      backgroundColor:
-                        novoCom.tipo === cat ? theme.primary[0] : theme.bg,
-                      borderWidth: 1,
-                      borderColor:
-                        novoCom.tipo === cat ? theme.primary[0] : theme.border,
-                    }}
-                  >
-                    <Text
+                {CATEGORIAS_COMUNICADO.map((cat) => {
+                  const ativo = novoCom.tipo === cat.tipo;
+                  return (
+                    <TouchableOpacity
+                      key={cat.tipo}
+                      onPress={() => escolherCategoria(cat.tipo)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: ativo }}
                       style={{
-                        color: novoCom.tipo === cat ? "#FFF" : theme.text,
-                        fontSize: 12,
-                        fontWeight: "bold",
+                        flexBasis: "47%",
+                        flexGrow: 1,
+                        padding: 12,
+                        borderRadius: 14,
+                        borderWidth: 1,
+                        borderColor: ativo ? cat.cor : theme.border,
+                        backgroundColor: ativo ? cat.cor + "14" : theme.bg,
                       }}
                     >
-                      {cat}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                      <View style={styles.row}>
+                        <View
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: 9,
+                            backgroundColor: ativo ? cat.cor : cat.cor + "1A",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Ionicons
+                            name={cat.icone}
+                            size={15}
+                            color={ativo ? "#FFF" : cat.cor}
+                          />
+                        </View>
+                        <Text
+                          style={{
+                            marginLeft: 8,
+                            color: ativo ? cat.cor : theme.text,
+                            fontWeight: "800",
+                            fontSize: 12,
+                          }}
+                        >
+                          {cat.tipo}
+                        </Text>
+                      </View>
+                      <Text
+                        style={{
+                          color: theme.textMuted,
+                          fontSize: 10,
+                          marginTop: 6,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {cat.descricao}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
 
+              <Text
+                style={{
+                  color: theme.text,
+                  fontSize: 12,
+                  marginBottom: 8,
+                  fontWeight: "700",
+                }}
+              >
+                Título
+              </Text>
               <TextInput
                 style={[
                   styles.input,
@@ -2631,13 +3057,36 @@ export default function App() {
                     color: theme.text,
                     borderColor: theme.border,
                     backgroundColor: theme.bg,
+                    marginBottom: 4,
                   },
                 ]}
-                placeholder="Título do Comunicado"
+                placeholder="Ex.: Manutenção do elevador"
                 placeholderTextColor={theme.textMuted}
+                maxLength={LIMITE.tituloComunicado}
                 value={novoCom.titulo}
                 onChangeText={(t) => setNovoCom({ ...novoCom, titulo: t })}
               />
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  fontSize: 11,
+                  alignSelf: "flex-end",
+                  marginBottom: 12,
+                }}
+              >
+                {novoCom.titulo.length}/{LIMITE.tituloComunicado}
+              </Text>
+
+              <Text
+                style={{
+                  color: theme.text,
+                  fontSize: 12,
+                  marginBottom: 8,
+                  fontWeight: "700",
+                }}
+              >
+                Mensagem
+              </Text>
               <TextInput
                 style={[
                   styles.input,
@@ -2645,19 +3094,192 @@ export default function App() {
                     color: theme.text,
                     borderColor: theme.border,
                     backgroundColor: theme.bg,
-                    height: 100,
+                    height: 120,
                     textAlignVertical: "top",
+                    marginBottom: 4,
                   },
                 ]}
-                placeholder="Digite a mensagem completa..."
+                placeholder="Escreva os detalhes do comunicado..."
                 placeholderTextColor={theme.textMuted}
                 multiline
+                maxLength={LIMITE.comunicado}
                 value={novoCom.texto}
                 onChangeText={(t) => setNovoCom({ ...novoCom, texto: t })}
               />
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  fontSize: 11,
+                  alignSelf: "flex-end",
+                  marginBottom: 14,
+                }}
+              >
+                {novoCom.texto.length}/{LIMITE.comunicado}
+              </Text>
+
+              {novoCom.tipo === "CONDUTA" && (
+                <View style={{ marginBottom: 16 }}>
+                  <Text
+                    style={{
+                      color: theme.text,
+                      fontSize: 12,
+                      marginBottom: 4,
+                      fontWeight: "700",
+                    }}
+                  >
+                    Apartamento destinatário
+                  </Text>
+                  <Text
+                    style={{
+                      color: theme.textMuted,
+                      fontSize: 11,
+                      lineHeight: 16,
+                      marginBottom: 10,
+                    }}
+                  >
+                    Só os moradores deste apartamento recebem o comunicado.
+                  </Text>
+
+                  {erroUnidades !== "" && (
+                    <Text
+                      style={{ color: theme.danger, fontSize: 12, marginBottom: 8 }}
+                    >
+                      {erroUnidades}
+                    </Text>
+                  )}
+
+                  {unidades.length > 0 && (
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        flexWrap: "wrap",
+                        gap: 8,
+                        marginBottom: 10,
+                      }}
+                    >
+                      {unidades.map((unidade) => {
+                        const ativo = novoCom.unidade.trim() === unidade;
+                        return (
+                          <TouchableOpacity
+                            key={unidade}
+                            onPress={() =>
+                              setNovoCom((prev) => ({ ...prev, unidade }))
+                            }
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: ativo }}
+                            style={{
+                              paddingVertical: 7,
+                              paddingHorizontal: 12,
+                              borderRadius: 18,
+                              borderWidth: 1,
+                              borderColor: ativo ? corConduta : theme.border,
+                              backgroundColor: ativo
+                                ? corConduta + "14"
+                                : theme.bg,
+                            }}
+                          >
+                            <Text
+                              style={{
+                                color: ativo ? corConduta : theme.text,
+                                fontSize: 12,
+                                fontWeight: "700",
+                              }}
+                            >
+                              {unidade}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+
+                  <TextInput
+                    style={[
+                      styles.input,
+                      {
+                        color: theme.text,
+                        borderColor: theme.border,
+                        backgroundColor: theme.bg,
+                        marginBottom: 0,
+                      },
+                    ]}
+                    placeholder="Ou digite o apartamento"
+                    placeholderTextColor={theme.textMuted}
+                    maxLength={LIMITE.unidade}
+                    autoCapitalize="words"
+                    value={novoCom.unidade}
+                    onChangeText={(t) =>
+                      setNovoCom((prev) => ({ ...prev, unidade: t }))
+                    }
+                  />
+                </View>
+              )}
+
+              <View
+                style={[
+                  styles.row,
+                  {
+                    borderWidth: 1,
+                    borderColor: novoCom.importante
+                      ? corCategoriaAtual
+                      : theme.border,
+                    backgroundColor: novoCom.importante
+                      ? corCategoriaAtual + "12"
+                      : theme.bg,
+                    borderRadius: 14,
+                    padding: 14,
+                    marginBottom: 18,
+                  },
+                ]}
+              >
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <View style={styles.row}>
+                    <Ionicons
+                      name="flame"
+                      size={16}
+                      color={
+                        novoCom.importante
+                          ? corCategoriaAtual
+                          : theme.textMuted
+                      }
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text
+                      style={{
+                        color: theme.text,
+                        fontWeight: "800",
+                        fontSize: 14,
+                      }}
+                    >
+                      Importante
+                    </Text>
+                  </View>
+                  <Text
+                    style={{
+                      color: theme.textMuted,
+                      fontSize: 12,
+                      lineHeight: 17,
+                      marginTop: 4,
+                    }}
+                  >
+                    Dá destaque no mural e faz o telemóvel vibrar ao receber.
+                  </Text>
+                </View>
+                <Switch
+                  trackColor={{
+                    false: theme.border,
+                    true: corCategoriaAtual,
+                  }}
+                  thumbColor={"#FFF"}
+                  value={novoCom.importante}
+                  onValueChange={(valor) =>
+                    setNovoCom((prev) => ({ ...prev, importante: valor }))
+                  }
+                />
+              </View>
 
               {erroNovoCom !== "" && (
-                <Text style={{ color: "#ef4444", marginBottom: 10 }}>
+                <Text style={{ color: theme.danger, marginBottom: 10 }}>
                   {erroNovoCom}
                 </Text>
               )}
@@ -2676,6 +3298,12 @@ export default function App() {
                     colors={theme.primary as [string, string]}
                     style={styles.btnGradient}
                   >
+                    <Feather
+                      name="send"
+                      size={16}
+                      color="#FFF"
+                      style={{ marginRight: 8 }}
+                    />
                     <Text style={styles.btnText}>
                       {publicandoCom ? "Publicando..." : "Publicar"}
                     </Text>
@@ -2693,6 +3321,117 @@ export default function App() {
                   </Text>
                 </TouchableOpacity>
               </View>
+            </View>
+          </ModalOverlay>
+        </Modal>
+
+        {/* Modal: Confirmação de ciência (só Conduta) */}
+        <Modal
+          visible={!!comunicadoParaCiencia}
+          transparent
+          animationType="fade"
+          supportedOrientations={ORIENTACOES}
+          onRequestClose={() => setComunicadoParaCiencia(null)}
+        >
+          <ModalOverlay>
+            <View
+              style={[styles.modalContent, { backgroundColor: theme.card }]}
+            >
+              <View style={{ alignItems: "center", marginBottom: 16 }}>
+                <View
+                  style={{
+                    width: 64,
+                    height: 64,
+                    borderRadius: 32,
+                    backgroundColor: corConduta + "1A",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Feather name="shield" size={30} color={corConduta} />
+                </View>
+              </View>
+
+              <Text
+                style={[
+                  styles.pageTitle,
+                  {
+                    color: theme.text,
+                    textAlign: "center",
+                    fontSize: 22,
+                    marginBottom: 10,
+                  },
+                ]}
+              >
+                Confirmar ciência
+              </Text>
+
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  textAlign: "center",
+                  lineHeight: 21,
+                  marginBottom: 8,
+                }}
+              >
+                Comunicado de conduta:
+              </Text>
+              <Text
+                style={{
+                  color: theme.text,
+                  textAlign: "center",
+                  fontWeight: "800",
+                  fontSize: 16,
+                  marginBottom: 12,
+                }}
+              >
+                {comunicadoParaCiencia?.titulo}
+              </Text>
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  textAlign: "center",
+                  lineHeight: 21,
+                  marginBottom: 22,
+                }}
+              >
+                Ao confirmar, declara que está ciente do comunicado e de acordo
+                com o aviso.
+              </Text>
+
+              <TouchableOpacity
+                disabled={confirmandoCiencia}
+                onPress={confirmarCiencia}
+                style={{ opacity: confirmandoCiencia ? 0.6 : 1 }}
+              >
+                <View
+                  style={[styles.btnGradient, { backgroundColor: corConduta }]}
+                >
+                  <Feather
+                    name="check"
+                    size={18}
+                    color="#FFF"
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={styles.btnText}>
+                    {confirmandoCiencia
+                      ? "A registar..."
+                      : "Estou ciente e de acordo"}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.btnOutline,
+                  { borderColor: theme.border, marginTop: 10 },
+                ]}
+                onPress={() => setComunicadoParaCiencia(null)}
+              >
+                <Text style={{ color: theme.text, fontWeight: "700" }}>
+                  Cancelar
+                </Text>
+              </TouchableOpacity>
             </View>
           </ModalOverlay>
         </Modal>

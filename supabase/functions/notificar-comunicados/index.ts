@@ -1,5 +1,7 @@
 /**
  * Envia o push de um comunicado recém-publicado aos aparelhos web registrados.
+ * Comunicado de conduta vai só para os aparelhos do apartamento destinatário: o
+ * filtro é refeito aqui porque a função lê os tokens com service_role.
  *
  * Quem chama é o gatilho `comunicados_notificar` (migração 0017), via pg_net,
  * com `Authorization: Bearer <NOTIFICAR_WEBHOOK_SECRET>`. A função roda com
@@ -16,7 +18,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cert, getApps, initializeApp } from "npm:firebase-admin/app";
 import { getMessaging } from "npm:firebase-admin/messaging";
 
-type Comunicado = { tipo: string; titulo: string; texto: string };
+type Comunicado = {
+  id: number;
+  tipo: string;
+  titulo: string;
+  texto: string;
+};
 type PayloadDoWebhook = { record: Comunicado };
 
 // Códigos do FCM que significam "este token não existe mais": o aparelho
@@ -43,6 +50,8 @@ const ehPayloadDoWebhook = (valor: unknown): valor is PayloadDoWebhook => {
   return (
     typeof registro === "object" &&
     registro !== null &&
+    "id" in registro &&
+    typeof registro.id === "number" &&
     "tipo" in registro &&
     typeof registro.tipo === "string" &&
     "titulo" in registro &&
@@ -107,6 +116,29 @@ serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, chaveServico);
 
+    // Conduta é sigilosa por apartamento: o RLS barra o morador no app, mas o push
+    // sai com service_role e precisa do mesmo filtro. O gatilho manda só os campos
+    // básicos, então o destinatário é lido da própria linha publicada.
+    let unidadeDestino: string | null = null;
+    if (comunicado.tipo.toUpperCase() === "CONDUTA") {
+      const { data: publicado, error: erroDoComunicado } = await supabase
+        .from("comunicados")
+        .select("unidade_destino")
+        .eq("id", comunicado.id)
+        .maybeSingle();
+      if (erroDoComunicado) throw erroDoComunicado;
+
+      unidadeDestino = String(publicado?.unidade_destino ?? "")
+        .trim()
+        .toLowerCase();
+      if (unidadeDestino === "") {
+        return resposta({
+          message: "Conduta sem apartamento destinatário.",
+          disparos: 0,
+        });
+      }
+    }
+
     // Só tokens web: os do provedor nativo ('expo') têm outro formato e o FCM
     // os rejeitaria. AVISO e REUNIÃO vão para todos; MANUTENÇÃO e SOCIAL
     // respeitam a preferência de cada perfil. A leitura é paginada porque o
@@ -116,7 +148,7 @@ serve(async (req) => {
       let query = supabase
         .from("dispositivos_notificacao")
         .select(
-          "token, perfil:perfis!dispositivos_notificacao_user_id_fkey!inner(notifica_manutencao, notifica_social)",
+          "token, perfil:perfis!dispositivos_notificacao_user_id_fkey!inner(notifica_manutencao, notifica_social, unidade)",
         )
         .eq("plataforma", "web")
         .order("id")
@@ -130,7 +162,13 @@ serve(async (req) => {
 
       const { data: pagina, error } = await query;
       if (error) throw error;
-      (pagina ?? []).forEach((d) => todosOsTokens.add(String(d.token)));
+      (pagina ?? []).forEach((d) => {
+        if (unidadeDestino !== null) {
+          const unidade = String(d.perfil?.unidade ?? "").trim().toLowerCase();
+          if (unidade !== unidadeDestino) return;
+        }
+        todosOsTokens.add(String(d.token));
+      });
       if ((pagina ?? []).length < PAGINA_CONSULTA) break;
     }
 

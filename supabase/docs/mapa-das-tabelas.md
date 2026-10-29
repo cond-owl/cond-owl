@@ -2,7 +2,7 @@
 
 - **Projeto:** CondoOwl (Supabase)
 - **Branch:** fix/0001-vulnerabilidade-perfil-aprovacao
-- **Migrações:** 0001 a 0017
+- **Migrações:** 0001 a 0019
 - **Situação:** esquema validado em Postgres de teste; o app usa o cadastro, a aprovação, os comunicados, as reservas, as sugestões e as atas
 
 ## 1. Visão geral
@@ -86,6 +86,8 @@ erDiagram
         text tipo
         text titulo
         text texto
+        boolean importante
+        text unidade_destino
     }
     EVENTOS {
         bigint id
@@ -135,8 +137,8 @@ sequenceDiagram
 | `dispositivos_notificacao` | o próprio usuário | usuário registra tokens das instalações do PWA; síndico não lê tokens |
 | `tipo_usuario` | qualquer usuário logado | ninguém pela API (só o dono do banco) |
 | `condominios` | síndico e moradores aprovados | só síndico |
-| `comunicados` | síndico e moradores aprovados | só síndico; cada publicação dispara o push pelo gatilho `comunicados_notificar` (0017) |
-| `comunicados_vistos` | o próprio usuário; síndico | cada um registra o seu |
+| `comunicados` | síndico e moradores aprovados; conduta só o apartamento destinatário | só síndico; cada publicação dispara o push pelo gatilho     `comunicados_notificar` (0017) |
+| `comunicados_vistos` | o próprio usuário; síndico | cada um registra o seu, só de comunicado que consegue ler |
 | `eventos` | síndico e moradores aprovados | síndico cria qualquer tipo; morador aprovado só reserva em seu nome, de hoje em diante |
 | `atas` | síndico e moradores aprovados | só síndico |
 | `sugestoes` | síndico e moradores aprovados | morador envia como pendente; só síndico avalia |
@@ -155,6 +157,8 @@ Quem não está logado (`anon`) não acessa nenhuma tabela. A única coisa que `
 - **Código do condomínio** é único e só em minúsculas.
 - **Condomínio com moradores** não pode ser apagado.
 - **Espaço de reserva repetido** (mesmo nome, sem diferenciar maiúsculas) é barrado.
+- **Comunicado de conduta** exige o apartamento destinatário e só é lido pelos moradores dele; as demais categorias não podem restringir a unidade.
+- **Ciência de comunicado** só é aceita para o que o usuário consegue ler; adivinhar o id de uma conduta alheia não registra nada.
 
 ## 6. O que ainda não existe
 

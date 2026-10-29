@@ -1,11 +1,11 @@
 import { supabase } from "../supabase";
 import { MESES } from "./calendario";
 
-// Acesso às tabelas eventos (reservas), espacos_reserva (configuração do síndico),
-// sugestoes e atas. Quem protege os dados é o RLS (supabase/migrations 0006 a 0008 e
-// 0015); aqui só se consulta e se traduz o erro do banco. As listas devolvem null em
-// caso de erro (quem chama decide o que mostrar); as gravações devolvem a mensagem de
-// erro para o usuário, ou null se deu certo.
+// Acesso às tabelas comunicados, eventos (reservas), espacos_reserva (configuração
+// do síndico), sugestoes e atas. Quem protege os dados é o RLS (supabase/migrations
+// 0005 a 0008 e 0018 a 0019); aqui só se consulta e se traduz o erro do banco. As
+// listas devolvem null em caso de erro (quem chama decide o que mostrar); as
+// gravações devolvem a mensagem de erro para o usuário, ou null se deu certo.
 
 export interface Evento {
   data: string; // AAAA-MM-DD
@@ -50,7 +50,11 @@ interface EspacoRow {
   id: number;
   nome: string;
 }
-
+// Linha de `perfis` usada para montar a lista de apartamentos.
+interface UnidadeRow {
+  unidade: string | null;
+}
+// Limites das colunas (iguais aos CHECK das migrações); o app usa em maxLength.
 // Limites das colunas (iguais aos CHECK das migrações); o app usa em maxLength.
 export const LIMITE = {
   detalhes: 2000,
@@ -59,6 +63,9 @@ export const LIMITE = {
   pauta: 200,
   arquivo: 500,
   espaco: 60,
+  comunicado: 2000,
+  tituloComunicado: 120,
+  unidade: 30,
 };
 
 // "18:00:00" (coluna time) -> "18:00"
@@ -172,6 +179,27 @@ export const removerEspaco = async (id: number): Promise<string | null> => {
   return data && data.length > 0
     ? null
     : "Apenas o síndico pode remover espaços.";
+};
+
+// --- COMUNICADOS ---
+
+// Apartamentos cadastrados, sem repetir. O síndico usa a lista no seletor de
+// destinatário do comunicado de conduta; a policy de perfis já permite que ele
+// leia todos.
+export const carregarUnidades = async (): Promise<string[] | null> => {
+  const { data, error } = await supabase
+    .from("perfis")
+    .select("unidade")
+    .not("unidade", "is", null)
+    .order("unidade");
+  if (error) return null;
+
+  const unidades = new Set<string>();
+  for (const perfil of (data ?? []) as UnidadeRow[]) {
+    const unidade = (perfil.unidade ?? "").trim();
+    if (unidade) unidades.add(unidade);
+  }
+  return [...unidades];
 };
 
 // --- SUGESTÕES ---
